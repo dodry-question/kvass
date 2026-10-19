@@ -121,6 +121,9 @@ impl Renderer {
             // первая попавшаяся стена; если это прилавок — ещё и стена за ним
             let mut first: Option<(Tile, usize, f32)> = None;
             let mut second: Option<(Tile, usize, f32)> = None;
+            // первая ПОЛНАЯ стена за низкой мебелью — реальный ограничитель
+            // глубины спрайтов (см. zbuf ниже)
+            let mut far: Option<f32> = None;
             loop {
                 if side_x < side_y {
                     side_x += delta_x;
@@ -139,14 +142,26 @@ impl Renderer {
                         (map_y as f32 - cam.y + (1 - step_y) as f32 / 2.0) / rdy
                     })
                     .max(0.05);
+                    let low = matches!(t, Tile::Counter | Tile::Barrel);
                     if first.is_none() {
                         first = Some((t, side, perp));
-                        if !matches!(t, Tile::Counter | Tile::Barrel) {
+                        if !low {
                             break;
                         }
                     } else {
-                        second = Some((t, side, perp));
-                        break;
+                        // «второй» объект — для отрисовки над прилавком
+                        // (может быть и сам прилавок: вид косой вдоль ряда)
+                        if second.is_none() {
+                            second = Some((t, side, perp));
+                        }
+                        if !low {
+                            far = Some(perp);
+                            break;
+                        }
+                        // очередная клетка низкой мебели — едем дальше за
+                        // настоящей стеной, иначе спрайт за прилавком
+                        // «закрыт» соседней клеткой прилавка (баг: бабушки
+                        // не было видно, zbuf оказывался меньше её глубины)
                     }
                 }
                 steps += 1;
@@ -155,7 +170,15 @@ impl Renderer {
                 }
             }
             let Some((hit_tile, side, perp)) = first else { continue };
-            self.zbuf[x] = perp;
+            // Прилавок/бочка — низкая мебель: покупателя за ним НЕЛЬЗЯ
+            // «резать» по кромке (баг «половина человека»). Ограничитель —
+            // только полная стена за мебелью (far); если её нет в кадре —
+            // глубина не ограничена.
+            if matches!(hit_tile, Tile::Counter | Tile::Barrel) {
+                self.zbuf[x] = far.unwrap_or(f32::MAX);
+            } else {
+                self.zbuf[x] = perp;
+            }
             // Перспектива честная: высота стены — по реальному
             // перпендикулярному расстоянию (кламп расстояния давал
             // «сжатие» объектов вблизи: они переставали расти).
@@ -177,14 +200,9 @@ impl Renderer {
             let start_raw = end_raw - wall_h;
             let end = end_raw.min(SCREEN_H as i32);
             let start = start_raw.max(0).min(SCREEN_H as i32);
-            // Спрайты: над высокой стеной НИЧЕГО не видно (раньше головы
-            // покупателей из-за масштаба 1.2 торчали над стенами); у прилавка —
-            // видно то, что выступает над его низким торцом.
-            self.ztop[x] = if matches!(hit_tile, Tile::Counter | Tile::Barrel) {
-                start
-            } else {
-                0
-            };
+            // Прилавок/бочка не отсекают спрайты по кромке: покупатель за
+            // низкой мебелью рисуется целиком (иначе — баг «половина человека»).
+            self.ztop[x] = 0;
             let wall_x = if side == 0 {
                 cam.y + perp * rdy
             } else {
@@ -305,12 +323,13 @@ impl Renderer {
                 continue;
             }
             let screen_x = ((SCREEN_W as f32 / 2.0) * (1.0 + tx / ty)) as i32;
-            // люди чуть выше тайла, ноги точно на линии пола; высота —
-            // честная перспектива (кламп 160px «сплющивал» людей вблизи)
-            const SPRITE_SCALE: f32 = 1.2;
-            let sprite_h = ((SCREEN_H as f32 / ty * SPRITE_SCALE).max(1.0)) as usize;
-            let sprite_w = sprite_h / 2; // 32x64
-            let feet = HORIZON as f32 + (0.5 * SCREEN_H as f32) / ty;
+            // Рост человека = доля полной стены-тайла (sprite_h = SCREEN_H/ty*SCALE,
+            // полная стена = SCREEN_H/ty). 1.2 делал «переростков» с головой над
+            // стеной; 0.75 — человек ~3/4 стены, голова ниже кромки, читается цельным.
+            const SPRITE_SCALE: f32 = 0.75;
+            let sprite_h = ((SCREEN_H as f32 / ty * SPRITE_SCALE).clamp(1.0, SCREEN_H as f32)) as usize;
+            let sprite_w = sprite_h / 2; // 64x128 спрайты
+            let feet = HORIZON as f32 + (SCREEN_H as i32 - HORIZON) as f32 / ty;
             // Клампим только диапазон отрисовки, а НЕ начало спрайта:
             // иначе у близко стоящего человека (голова выше кадра) текстура
             // растягивалась по обрезанному ящику и он «обрезался» посередине.

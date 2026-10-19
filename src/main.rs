@@ -15,6 +15,7 @@ mod map;
 mod palette;
 mod player;
 mod raycaster;
+mod dump;
 mod selftest;
 mod sprites;
 mod textures;
@@ -123,6 +124,10 @@ fn fit_screen(
 fn main() {
     if std::env::args().any(|a| a == "--selftest") {
         selftest::run();
+        return;
+    }
+    if std::env::args().any(|a| a == "--dump-sprites") {
+        dump::run();
         return;
     }
     App::new()

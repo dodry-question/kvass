@@ -268,9 +268,9 @@ fn bubble_layout(
             continue;
         }
         let screen_x = ((CV_W as f32 / 2.0) * (1.0 + tx / ty)) as i32;
-        // масштаб Head Up: спрайт рисуется высотой SCREEN_H/d*1.2 в буфере,
-        // канвас — ×2 к буферу.
-        let sprite_h = ((SCREEN_H as f32 / ty) * 1.2 * 2.0) as i32;
+        // масштаб Head Up: спрайт рисуется высотой SCREEN_H/d*SPRITE_SCALE в буфере,
+        // канвас — ×2 к буферу. SCALE должен совпадать с raycaster::SPRITE_SCALE (0.75).
+        let sprite_h = ((SCREEN_H as f32 / ty) * 0.75 * 2.0) as i32;
         let feet = ((HORIZON as f32 + (0.5 * SCREEN_H as f32) / ty) * 2.0) as i32;
         let top = feet - sprite_h;
 
@@ -329,8 +329,8 @@ fn draw_bubbles(c: &mut Canvas, font: &Font, bubbles: &[Bubble]) {
         c.rect(b.bx + 4, b.by + 4, b.w, b.h, [0, 0, 0], 110);
         c.rect(b.bx, b.by, b.w, b.h, col::WHITE, 250);
         c.frame(b.bx, b.by, b.w, b.h, col::BLACK, 255);
-        // пиксельная стрелка-хвостик вниз, строго к макушке покупателя
-        let tx = b.screen_x.clamp(b.bx + 12, b.bx + b.w - 12);
+        // пиксельная стрелка-хвостик вниз, строго под центром облачка
+        let tx = b.bx + b.w / 2;
         for dy in 0..12 {
             let half = 5 - dy / 2; // сужается: 5 → 0
             c.rect(tx - half - 1, b.by + b.h + dy, half * 2 + 3, 1, col::BLACK, 255);
@@ -697,7 +697,7 @@ fn draw_tutorial(
         return;
     }
     let screen_x = ((CV_W as f32 / 2.0) * (1.0 + px / py)) as i32;
-    let sprite_h = (((SCREEN_H as f32 / py) * 1.2 * 2.0) as i32).min(320);
+    let sprite_h = (((SCREEN_H as f32 / py) * 0.75 * 2.0) as i32).min(320);
     let feet = ((HORIZON as f32 + (0.5 * SCREEN_H as f32) / py) * 2.0) as i32;
     let top = feet - sprite_h - 24;
     let cx = screen_x.clamp(40, CV_W - 40);

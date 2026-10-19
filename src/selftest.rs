@@ -478,4 +478,16 @@ fn write_bmp_sized(path: &Path, rgba: &[u8], w: usize, h: usize) {
         }
     }
     fs::write(path, b).expect("записать bmp");
+    // тот же кадр в PNG — просмотр BMP невозможен в чате/просмотрщике
+    let mut rgb = Vec::with_capacity(w * h * 3);
+    for y in 0..h {
+        for x in 0..w {
+            let o = (y * w + x) * 4;
+            rgb.push(rgba[o]);
+            rgb.push(rgba[o + 1]);
+            rgb.push(rgba[o + 2]);
+        }
+    }
+    let png = path.with_extension("png");
+    crate::dump::write_png(&png, w, h, &rgb).expect("записать png");
 }

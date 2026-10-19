@@ -1,3 +1,4 @@
 /target
 /selftest_out
 *.bak
+*.log
