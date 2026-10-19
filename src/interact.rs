@@ -199,9 +199,11 @@ pub fn interact(
                     c.served = true;
                     c.path = std::collections::VecDeque::from([crate::customer::DOOR]);
                     state.notify(format!("{}: +{} К.", kind.name(), pay));
+                    state.face_set(1, 2.5); // улыбка: покупатель доволен
                 }
                 None => {
                     state.notify(format!("НЕТ ПОЛНОГО {} В РУКАХ", order.name()));
+                    state.face_set(2, 1.0); // хмурится: нет нужного
                 }
             }
         }
@@ -367,8 +369,9 @@ pub fn brew_qte(
         return;
     }
 
-    // бегунок бежит по полоске
-    let speed = 0.72;
+    // бегунок бежит по полоске (медленно: игрок должен успевать реагировать)
+    let speed = 0.5;
+    let prev_pos = qte.pos;
     qte.pos += qte.dir * speed * dt;
     if qte.pos >= 1.0 {
         qte.pos = 1.0;
@@ -380,7 +383,12 @@ pub fn brew_qte(
 
     if pressed && qte.lock <= 0.0 {
         qte.lock = 0.2;
-        if qte.pos >= qte.zone0 && qte.pos <= qte.zone1 {
+        // попадание, если бегунок БЫЛ в зоне или пересёк её на этом кадре
+        // (сегмент хода [prev..pos] пересекает зону с небольшим запасом)
+        let margin = 0.015;
+        let (a, b) = (prev_pos.min(qte.pos), prev_pos.max(qte.pos));
+        let hit = b >= qte.zone0 - margin && a <= qte.zone1 + margin;
+        if hit {
             if let Some(b) = barrels.mutable_at(tx, ty) {
                 b.boost();
             }
@@ -398,11 +406,13 @@ pub fn brew_qte(
                     crate::brewing::QTE_BONUS as i32,
                     pct as i32
                 ));
+                state.face_set(1, 1.0); // подмигивает: попал
             }
         } else {
             qte.flash = -0.25;
             crate::audio::play_sfx(&mut commands, &bank, "water", 0.4);
             state.notify("МИМО! ПОДОЖДИТЕ БЕГУНКА В ЗОНЕ".into());
+            state.face_set(2, 1.5); // морщится: мимо
         }
     }
 }

@@ -54,6 +54,10 @@ pub struct GameState {
     pub pause_prev: u8,
     /// Выбранный пункт меню паузы.
     pub pause_sel: u8,
+    /// Лик героя (Doom-style): 0 спокойно, 1 рад (купил), 2 мимо/боль.
+    pub face_mood: u8,
+    /// Секунд, сколько держится текущее выражение лица.
+    pub face_t: f32,
 }
 
 impl Default for GameState {
@@ -76,6 +80,8 @@ impl Default for GameState {
             tut_done: false,
             pause_prev: PAUSE_FROM_PLAYING,
             pause_sel: 0,
+            face_mood: 0,
+            face_t: 0.0,
         }
     }
 }
@@ -84,6 +90,11 @@ impl GameState {
     pub fn notify(&mut self, text: String) {
         self.msg = text;
         self.msg_t = 3.0;
+    }
+    /// Выражение лица героя на `secs` секунд (Doom-style лик в HUD).
+    pub fn face_set(&mut self, mood: u8, secs: f32) {
+        self.face_mood = mood;
+        self.face_t = secs;
     }
 }
 
@@ -302,6 +313,12 @@ pub fn day_system(
     let dt = time.delta_secs();
     if state.msg_t > 0.0 {
         state.msg_t -= dt;
+    }
+    if state.face_t > 0.0 {
+        state.face_t -= dt;
+        if state.face_t <= 0.0 {
+            state.face_mood = 0;
+        }
     }
     state.time_left -= dt;
     if state.time_left <= 0.0 {

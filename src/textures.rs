@@ -169,6 +169,28 @@ fn gen_barrel(t: &mut Vec<u8>) {
             px(t, x, y, c);
         }
     }
+
+    // кран внизу по центру: вентиль, корпус, носик с бликом
+    for y in 42..47 {
+        for x in 28..36 {
+            px(t, x, y, if y == 42 || x == 28 || x == 35 { idx::BLACK } else { idx::METAL });
+        }
+    }
+    for y in 47..54 {
+        for x in 30..34 {
+            px(t, x, y, if x == 33 { idx::WHITE } else { idx::METAL_DARK });
+        }
+    }
+    for y in 50..52 {
+        for x in 34..39 {
+            px(t, x, y, if y == 51 { idx::WHITE } else { idx::METAL });
+        }
+    }
+    // вентиль сверху
+    for x in 25..39 {
+        px(t, x, 40, idx::METAL_DARK);
+        px(t, x, 41, idx::METAL);
+    }
 }
 
 /// Прилавок. Раньше по всей ширине шли чёрные вертикальные швы каждые 16px,

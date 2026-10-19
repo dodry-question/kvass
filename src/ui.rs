@@ -41,6 +41,8 @@ pub mod col {
     pub const INK: [u8; 3] = [26, 21, 17];
     pub const SKY: [u8; 3] = [135, 168, 201];
     pub const LEAVES: [u8; 3] = [74, 122, 58];
+    pub const SKIN: [u8; 3] = [217, 160, 109];
+    pub const SKIN_D: [u8; 3] = [170, 116, 79];
 }
 
 // --- Константы вёрстки ---
@@ -86,10 +88,11 @@ pub fn draw_frame(
         }
         Phase::Playing | Phase::Tutorial => {
             let bubbles = bubble_layout(customers, font, cam);
-            draw_hud(canvas, font, state, inv, barrels, qte, t, map, cam, &bubbles);
+            // предмет в руках — под HUD-слоем, чтобы плашки перекрывали его низ
             if !qte.active {
                 draw_viewmodel(canvas, inv, t, moving);
             }
+            draw_hud(canvas, font, state, inv, barrels, qte, t, map, cam, &bubbles);
             draw_bubbles(canvas, font, &bubbles);
             if state.phase == Phase::Tutorial {
                 draw_tutorial(canvas, font, state, customers, cam, t);
@@ -469,6 +472,9 @@ fn draw_hud(
         let money = format!("{} К.", state.money);
         font.draw(c, x, BAR_Y + 46, &money, SZ_XL, col::LAMP, 255);
     }
+
+    // Лик героя (Doom-style) — реагирует на события дня
+    draw_face(c, t, state.face_mood);
 
     // Слоты рук (4)
     for i in 0..4 {
@@ -1043,22 +1049,129 @@ fn draw_pause(c: &mut Canvas, font: &Font, state: &GameState) {
     );
 }
 
-// ============ предмет в руках от первого лица (Doom-style viewmodel) ============
+// ============ предмет в руках от первого лица (Minecraft/Doom viewmodel) ============
 
-/// Выбранный предмет внизу экрана: как «оружие» в Doom. Покачивается
-/// по синусоиде при ходьбе, слегка дышит в покое.
+/// Повёрнутый спрайт 16×16: nearest-сэмплинг по обратному повороту —
+/// остаётся крупным пикселем, наклон как у предмета в руке в Minecraft.
+fn blit_icon_rot(c: &mut Canvas, icon: &[u8], cx: i32, cy: i32, scale: f32, angle: f32) {
+    let (sin, cos) = angle.sin_cos();
+    let half = (16.0 * scale * (cos.abs() + sin.abs()) / 2.0) as i32;
+    for oy in -half..=half {
+        for ox in -half..=half {
+            // обратный поворот: экранный пиксель → пиксель спрайта
+            let fx = ox as f32 * cos + oy as f32 * sin;
+            let fy = -ox as f32 * sin + oy as f32 * cos;
+            let sx = (fx / scale + 7.5).round() as i32;
+            let sy = (fy / scale + 7.5).round() as i32;
+            if sx < 0 || sy < 0 || sx >= 16 || sy >= 16 {
+                continue;
+            }
+            let ci = icon[(sy * 16 + sx) as usize];
+            if ci == TRANSPARENT {
+                continue;
+            }
+            c.blend(cx + ox, cy + oy, PALETTE[ci as usize], 255);
+        }
+    }
+}
+
+/// Выбранный предмет в правом нижнем углу: крупный, под углом −18°,
+/// покачивается при ходьбе, в покое слегка дышит.
 fn draw_viewmodel(c: &mut Canvas, inv: &Inventory, t: f32, moving: bool) {
     let Some(item) = &inv.hands[inv.selected] else {
         return;
     };
     let icon = item_icon(item);
     let (bob, sway) = if moving {
-        (6.0 * (t * 6.1).sin(), 9.0 * (t * 3.1).sin())
+        (6.0 * (t * 6.1).sin(), 7.0 * (t * 3.1).sin())
     } else {
-        (2.5 * (t * 2.2).sin(), 3.0 * (t * 1.7).sin())
+        (2.5 * (t * 2.2).sin(), 2.5 * (t * 1.7).sin())
     };
-    let x = CV_W / 2 - 48 + sway as i32;
-    let y = (654.0 - 96.0 + bob) as i32;
-    blit_icon(c, &icon, x, y, 6);
+    let cx = CV_W - 200 + sway as i32;
+    let cy = 560 + bob as i32;
+    blit_icon_rot(c, &icon, cx, cy, 8.0, -0.32);
+}
+
+// ============ лик героя (Doom-style face в нижней панели) ============
+
+/// Лицо продавца-пилотки: смотрит чуть в сторону, моргает; реагирует:
+/// 0 — спокойно, 1 — улыбка (купил/попал), 2 — хмурая (мимо/нет товара).
+fn draw_face(c: &mut Canvas, t: f32, mood: u8) {
+    let x = 236;
+    let y = BAR_Y + 26;
+    let s = 60i32;
+    // плашка под лицом
+    c.rect(x + 3, y + 4, s, s, [0, 0, 0], 130);
+    c.rect(x, y, s, s, col::METAL_D, 255);
+    c.frame(x, y, s, s, col::BLACK, 255);
+    let fx = x + 7;
+    let fy = y + 8;
+    // лицо (скруглённое)
+    for row in 0..44 {
+        let inx = if row < 4 || row >= 40 { 6 } else { 2 };
+        c.rect(fx + inx, fy + row, 44 - inx * 2, 1, col::SKIN, 255);
+    }
+    // уши
+    c.rect(fx, fy + 20, 4, 10, col::SKIN, 255);
+    c.rect(fx + 40, fy + 20, 4, 10, col::SKIN, 255);
+    // пилотка квасника: белый колпак с козырьком
+    c.rect(fx + 2, fy - 2, 40, 10, col::WHITE, 255);
+    c.rect(fx, fy + 6, 44, 5, col::METAL, 255);
+    c.frame(fx, fy - 2, 44, 13, col::BLACK, 255);
+    c.rect(fx + 8, fy + 1, 8, 3, col::RED, 255); // красная звёздочка-крапинка
+    // брови
+    let brow_dy = if mood == 2 { 2 } else { 0 };
+    c.rect(fx + 8, fy + 15 - brow_dy, 10, 2, col::BLACK, 255);
+    c.rect(fx + 26, fy + 15 - brow_dy, 10, 2, col::BLACK, 255);
+    if mood == 2 {
+        // хмурые сходящиеся брови
+        c.rect(fx + 16, fy + 17, 4, 2, col::BLACK, 255);
+        c.rect(fx + 24, fy + 17, 4, 2, col::BLACK, 255);
+    }
+    // глаза (моргают)
+    let blinking = (t % 3.4) < 0.12;
+    let eye_y = fy + 21;
+    for ex in [fx + 9, fx + 27] {
+        if blinking {
+            c.rect(ex, eye_y + 2, 8, 2, col::BLACK, 255);
+        } else {
+            c.rect(ex, eye_y, 8, 6, col::WHITE, 255);
+            let px = if mood == 1 { ex + 5 } else { ex + 2 };
+            c.rect(px, eye_y + 1, 4, 4, col::INK, 255);
+        }
+    }
+    // нос
+    c.rect(fx + 20, fy + 22, 4, 8, col::SKIN_D, 255);
+    // рот по настроению
+    match mood {
+        1 => {
+            // улыбка
+            c.rect(fx + 13, fy + 34, 18, 2, col::BLACK, 255);
+            c.rect(fx + 11, fy + 32, 3, 2, col::BLACK, 255);
+            c.rect(fx + 30, fy + 32, 3, 2, col::BLACK, 255);
+        }
+        2 => {
+            // скривился
+            c.rect(fx + 13, fy + 33, 18, 2, col::BLACK, 255);
+            c.rect(fx + 15, fy + 35, 6, 2, col::BLACK, 255);
+            c.rect(fx + 25, fy + 31, 6, 2, col::BLACK, 255);
+            // капля пота
+            c.rect(fx + 36, fy + 18, 3, 6, col::SKY, 255);
+            c.rect(fx + 37, fy + 24, 2, 3, col::SKY, 255);
+        }
+        _ => {
+            // спокойно
+            c.rect(fx + 14, fy + 33, 16, 2, col::BLACK, 255);
+        }
+    }
+    // щёки и подбородок
+    if mood == 0 {
+        c.blend(fx + 8, fy + 30, col::RED, 60);
+        c.blend(fx + 32, fy + 30, col::RED, 60);
+    }
+    // лёгкая щетина
+    for (sx, sy) in [(12, 38), (20, 40), (28, 38), (16, 41), (32, 40)] {
+        c.blend(fx + sx, fy + sy, col::METAL_D, 140);
+    }
 }
 

@@ -141,7 +141,7 @@ impl Renderer {
                     .max(0.05);
                     if first.is_none() {
                         first = Some((t, side, perp));
-                        if t != Tile::Counter {
+                        if !matches!(t, Tile::Counter | Tile::Barrel) {
                             break;
                         }
                     } else {
@@ -166,10 +166,12 @@ impl Renderer {
             // практически на нём, как было при 0.48 — тогда людей резало
             // ровно посередине экрана). 0.40: видно от колен вверх, и человек
             // читается как стоящий за прилавком, а не «на» нём.
-            let wall_h = if hit_tile == Tile::Counter {
-                (full_h as f32 * 0.34) as i32
-            } else {
-                full_h
+            let wall_h = match hit_tile {
+                // прилавок — низкая перегородка (покупатель виден по пояс),
+                // бочка — наполовину роста: не режет людей и читается кругом
+                Tile::Counter => (full_h as f32 * 0.34) as i32,
+                Tile::Barrel => (full_h as f32 * 0.55) as i32,
+                _ => full_h,
             };
             let end_raw = HORIZON + full_h / 2;
             let start_raw = end_raw - wall_h;
@@ -178,7 +180,11 @@ impl Renderer {
             // Спрайты: над высокой стеной НИЧЕГО не видно (раньше головы
             // покупателей из-за масштаба 1.2 торчали над стенами); у прилавка —
             // видно то, что выступает над его низким торцом.
-            self.ztop[x] = if hit_tile == Tile::Counter { start } else { 0 };
+            self.ztop[x] = if matches!(hit_tile, Tile::Counter | Tile::Barrel) {
+                start
+            } else {
+                0
+            };
             let wall_x = if side == 0 {
                 cam.y + perp * rdy
             } else {
@@ -211,8 +217,8 @@ impl Renderer {
                 let band = light_band(bright, BAYER4[(x & 3) as usize][(y & 3) as usize]);
                 idx[y as usize * SCREEN_W + x] = self.colormap[c as usize][band];
             }
-            // над прилавком — дальняя стена (иначе виден только потолок)
-            if hit_tile == Tile::Counter && start > 0 {
+            // над прилавком/бочкой — дальняя стена (иначе виден только потолок)
+            if matches!(hit_tile, Tile::Counter | Tile::Barrel) && start > 0 {
                 if let Some((t2, side2, perp2)) = second {
                     let full2 = (SCREEN_H as f32 / perp2.max(0.2)) as i32;
                     let end2_raw = HORIZON + full2 / 2;

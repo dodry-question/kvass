@@ -173,8 +173,8 @@ impl Default for BrewQte {
 
 impl BrewQte {
     pub fn roll_zone(&mut self, rng: &mut StdRng) {
-        // зона ~8–13% полоски, в пределах 0.08..0.92
-        let len = rng.random_range(0.08..0.13);
+        // зона ~11–17% полоски, в пределах 0.06..0.94
+        let len = rng.random_range(0.11..0.17);
         let s = rng.random_range(0.06..(0.94 - len));
         self.zone0 = s;
         self.zone1 = s + len;
