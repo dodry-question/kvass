@@ -1,5 +1,8 @@
-//! Оффскрин-самотест: рисует кадры всех экранов в BMP-файлы и выходит.
+﻿//! Оффскрин-самотест: рисует кадры всех экранов в BMP-файлы и выходит.
 //! Запуск: `cargo run -- --selftest`. Файлы в `selftest_out/`.
+//!
+//! Кадр = мир 640×400 (×2) + канвас UI 1280×800 поверх (альфа-композиция),
+//! ровно как в игре: мир — нижний спрайт, UI — верхний.
 
 use std::fs;
 use std::path::Path;
@@ -7,12 +10,12 @@ use std::path::Path;
 use bevy::prelude::Vec2;
 
 use crate::brewing::{BarrelPhase, Barrels, BrewQte};
-use crate::day_cycle::{GameState, Phase};
-use crate::font::{rect, Font};
+use crate::canvas::{Canvas, CV_H, CV_W};
+use crate::day_cycle::{GameState, Phase, PAUSE_FROM_PLAYING, norm_for};
+use crate::font::{Font, SZ_L, SZ_M, SZ_S};
 use crate::inventory::{HandItem, Inventory};
 use crate::map::Map;
-use crate::palette::idx;
-use crate::raycaster::{GameCam, Renderer, SCREEN_H, SCREEN_W, UI_H, UI_W};
+use crate::raycaster::{GameCam, Renderer, SCREEN_H, SCREEN_W};
 use crate::sprites::{NpcKind, SpriteSheet, Vessel};
 use crate::textures::Textures;
 use crate::ui;
@@ -24,49 +27,45 @@ pub fn run() {
     let textures = Textures::generate();
     let sprites = SpriteSheet::generate();
     let font = Font::new();
-    // диагностика кегля: высота строки и ширина ключевых строк
-    for s in 1..=4 {
-        eprintln!(
-            "font metrics: scale={s} line_at={} ширина[КВАСНАЯ]={} ЛАВКА={} JAM={}",
-            font.line_at(s),
-            font.width_at("КВАСНАЯ", s),
-            font.width_at("ЛАВКА", s),
-            font.width_at("VYATKA OWLS GAME JAM", s),
-        );
-    }
     eprintln!(
-        "font metrics: fit_scale(КВАСНАЯ, 312, 4)={} fit_scale(JAM, 312, 1)={}",
-        font.fit_scale("КВАСНАЯ", UI_W - 8, 4),
-        font.fit_scale("VYATKA OWLS GAME JAM", UI_W - 8, 1),
+        "font metrics: {} — line(24)={} cap(24)={} w[КВАСНАЯ ЛАВКА](64)={} w[ШАГ](24)={}",
+        font.px_label,
+        font.line(SZ_M),
+        font.cap_h(SZ_M),
+        font.w("КВАСНАЯ ЛАВКА", 64),
+        font.w("ШАГ 4/7. К БОЧКЕ: E ТРИЖДЫ (СУХАРИ-ВОДА-САХАР)", SZ_M),
     );
     let mut renderer = Renderer::new();
+    let mut canvas = Canvas::new();
     let cam = GameCam {
         x: 5.5,
         y: 4.8,
         angle: -std::f32::consts::FRAC_PI_2 - 0.4,
     };
-    let empty = ui::CustomerView { list: &[] };
     let no_qte = BrewQte::default();
+    let no_cust: Vec<(Vec2, Option<String>)> = Vec::new();
+    let empty_inv = Inventory::default();
+
+    //snap: композиция кадра и запись
+    let snap = |canvas: &Canvas, world: Option<&[u8]>, name: &str| {
+        let final_rgba = match world {
+            Some(w) => canvas.over_world(w),
+            None => canvas.px.clone(),
+        };
+        write_bmp(&out.join(name), &final_rgba);
+    };
 
     // --- 1. Главное меню ---
     let state = GameState {
         phase: Phase::Menu,
         ..Default::default()
     };
+    canvas.clear();
     ui::draw_frame(
-        &mut renderer,
-        &font,
-        &state,
-        &Inventory::default(),
-        &Barrels::from_map(&map),
-        &no_qte,
-        &empty,
-        1.0,
-        &cam,
-        &map,
+        &mut canvas, &font, &state, &empty_inv, &Barrels::from_map(&map),
+        &no_qte, &no_cust, 1.0, &cam, &map,
     );
-    renderer.present();
-    write_bmp(&out.join("1_menu.bmp"), &renderer.rgba);
+    snap(&canvas, None, "1_menu.bmp");
 
     // --- 2. Склад (закупка) ---
     let inv = Inventory {
@@ -80,24 +79,18 @@ pub fn run() {
     };
     let state = GameState {
         phase: Phase::Shopping,
-        msg: "НАЧАЛО ДНЯ 1. ЗАКУПИТЕ СЫРЬЁ (1-3), ЗАТЕМ ENTER".into(),
+        money: 45,
+        norm: norm_for(1),
+        msg: "КУПЛЕНО: ПОСУДА (4+4+4) -15 К.".into(),
         msg_t: 3.0,
         ..Default::default()
     };
+    canvas.clear();
     ui::draw_frame(
-        &mut renderer,
-        &font,
-        &state,
-        &inv,
-        &Barrels::from_map(&map),
-        &no_qte,
-        &empty,
-        2.0,
-        &cam,
-        &map,
+        &mut canvas, &font, &state, &inv, &Barrels::from_map(&map),
+        &no_qte, &no_cust, 2.0, &cam, &map,
     );
-    renderer.present();
-    write_bmp(&out.join("2_shopping.bmp"), &renderer.rgba);
+    snap(&canvas, None, "2_shopping.bmp");
 
     // --- 3. Игровой день: мир + HUD + диалоги ---
     let mut barrels = Barrels::from_map(&map);
@@ -113,14 +106,13 @@ pub fn run() {
     }
     if let (Some(b0), Some(b1)) = (keys.get(0), keys.get(1)) {
         if b0 != b1 {
-            // две бочки с разными фазами — как советует игра
             if let Some(b) = barrels.map.get_mut(b1) {
                 b.phase = BarrelPhase::Ready(104.0);
                 b.portions = 13;
             }
         }
     }
-    let mut inv = Inventory {
+    let inv = Inventory {
         hands: [
             Some(HandItem::Croutons(2)),
             Some(HandItem::Full(Vessel::Glass, 1, false)),
@@ -138,145 +130,103 @@ pub fn run() {
         phase: Phase::Playing,
         day: 2,
         money: 47,
-        norm: 140,
+        norm: norm_for(2),
         day_earned: 60,
         time_left: 137.0,
         msg: "СУХАРИ КОНЧИЛИСЬ — КУПИТЕ (1) НА СКЛАДЕ".into(),
         msg_t: 3.0,
         ..Default::default()
     };
-    let renders = vec![
-        ui::CustomerRender {
-            kind: NpcKind::Grandma,
-            pos: Vec2::new(3.5, 2.7),
-            bubble: Some("Дай, внучек, стаканчик квасика, холодненький...".into()),
-        },
-        ui::CustomerRender {
-            kind: NpcKind::Worker,
-            pos: Vec2::new(5.5, 2.7),
-            bubble: Some("Стакан, но погуще, а то опять водица.".into()),
-        },
+    let custs = vec![
+        (
+            Vec2::new(3.5, 2.7),
+            Some("Дай, внучек, стаканчик квасика, холодненький...".into()),
+        ),
+        (
+            Vec2::new(5.5, 2.7),
+            Some("Стакан, но погуще, а то опять водица.".into()),
+        ),
     ];
-    let view = ui::CustomerView { list: &renders };
     renderer.render(&map, &textures, &cam, 1.0);
-    let list: Vec<(Vec2, NpcKind)> = renders.iter().map(|r| (r.pos, r.kind)).collect();
-    renderer.draw_sprites(&sprites, &list, &cam, 1.0);
-    ui::draw_frame(&mut renderer, &font, &state, &inv, &barrels, &no_qte, &view, 3.5, &cam, &map);
+    let sprite_list: Vec<(Vec2, NpcKind)> = vec![
+        (Vec2::new(3.5, 2.7), NpcKind::Grandma),
+        (Vec2::new(5.5, 2.7), NpcKind::Worker),
+    ];
+    renderer.draw_sprites(&sprites, &sprite_list, &cam, 1.0);
     renderer.present();
-    write_bmp(&out.join("3_playing.bmp"), &renderer.rgba);
+    let world_a = renderer.rgba.clone();
+    canvas.clear();
+    ui::draw_frame(&mut canvas, &font, &state, &inv, &barrels, &no_qte, &custs, 3.5, &cam, &map);
+    snap(&canvas, Some(&world_a), "3_playing.bmp");
 
     // --- 4. Итоги дня ---
     let state = GameState {
         phase: Phase::DayEnd,
         day: 2,
         money: 147,
-        norm: 140,
+        norm: norm_for(2),
         day_earned: 117,
         fine: 30,
+        fine_reason: "ТЕЧЬ В БОЧКЕ №2 (ПЕРЕБРОД)".into(),
         day_passed: true,
         ..Default::default()
     };
+    canvas.clear();
     ui::draw_frame(
-        &mut renderer,
-        &font,
-        &state,
-        &inv,
-        &Barrels::from_map(&map),
-        &no_qte,
-        &empty,
-        4.0,
-        &cam,
-        &map,
+        &mut canvas, &font, &state, &inv, &Barrels::from_map(&map),
+        &no_qte, &no_cust, 4.0, &cam, &map,
     );
-    renderer.present();
-    write_bmp(&out.join("4_dayend.bmp"), &renderer.rgba);
+    snap(&canvas, None, "4_dayend.bmp");
 
     // --- 5. Финал ---
     let state = GameState {
         phase: Phase::Final,
         ..Default::default()
     };
+    canvas.clear();
     ui::draw_frame(
-        &mut renderer,
-        &font,
-        &state,
-        &inv,
-        &Barrels::from_map(&map),
-        &no_qte,
-        &empty,
-        5.0,
-        &cam,
-        &map,
+        &mut canvas, &font, &state, &inv, &Barrels::from_map(&map),
+        &no_qte, &no_cust, 5.0, &cam, &map,
     );
-    renderer.present();
-    write_bmp(&out.join("5_final.bmp"), &renderer.rgba);
+    snap(&canvas, None, "5_final.bmp");
 
-    // --- 6. Шрифт: все глифы крупно + образцы реальных строк ---
-    // Раскладка по метрикам: строки складываются по измеренной высоте,
-    // длинные подбирают масштаб под ширину — ничего не наезжает.
-    let buf = &mut renderer.indices;
-    buf.fill(idx::SHADOW);
-    let rows = [
-        "АБВГДЕЁЖЗИЙ",
-        "КЛМНОПРСТУ",
-        "ФХЦЧШЩЪЫЬЭЮЯ",
-        "ABCDEFGHIJKLM",
-        "NOPQRSTUVWXYZ",
-        "0123456789 !?",
-        "КАВС ДО КОНЦА",
+    // --- 6. Шрифт: кегли и образцы реальных строк ---
+    canvas.clear();
+    canvas.rect(0, 0, CV_W, CV_H, [36, 30, 22], 255);
+    let rows: [(&str, usize); 8] = [
+        ("АБВГДЕЁЖЗИЙКЛМНОПРСТУ 0123456789", 30),
+        ("ФХЦЧШЩЪЫЬЭЮЯ abcdefghijklmnopqrstuvwxyz", 24),
+        ("правильный многонациональный текст ЁЙЩЭ №«»", 24),
+        ("КАВС ДО КОНЦА - МОНОПОЛИЯ СОВЕТСКАЯ", 30),
+        ("мелкая надпись на ценнике — базовый кегль 20", SZ_S),
+        ("ШРИФТ ЧИТАЕМЫЙ ПИКСЕЛЬНЫЙ БЕЗ ЛАПШИ", 38),
+        ("КВАСНАЯ ЛАВКА", 48),
+        ("КВАСНАЯ ЛАВКА", 64),
     ];
-    // кегль алфавита: наибольший, при котором все строки влезают в бюджет
-    let alpha_budget = 118i32;
-    let mut alpha_scale = 1usize;
-    for s in (1..=2usize).rev() {
-        let total: i32 = rows.iter().map(|r| font.line_at(font.fit_scale(r, UI_W - 8, s))).sum();
-        if total <= alpha_budget {
-            alpha_scale = s;
-            break;
-        }
+    let mut ry = 24i32;
+    for (r, s) in rows {
+        font.draw_sh(&mut canvas, 24, ry, r, s, ui::col::WHITE, 255);
+        ry += font.line(s) + 14;
     }
-    let mut ry = 2i32;
-    for r in rows.iter() {
-        let s = font.fit_scale(r, UI_W - 8, alpha_scale);
-        font.draw_scaled(buf, SCREEN_W, SCREEN_H, 4, ry, r, idx::WHITE, Some(idx::BLACK), s);
-        ry += font.line_at(s);
-    }
-    println!("font: алфабет (кегль {alpha_scale}) занял {ry} px, бюджет {alpha_budget}");
-    // диагностика: самые длинные строки не должны вылезать за 320
     for s in [
-        "БОЧКА: E - РЕЦЕПТ, ДЕРЖИТЕ E - РОЗЛИВ",
         "ШАГ 4/7. К БОЧКЕ: E ТРИЖДЫ (СУХАРИ-ВОДА-САХАР)",
-        "НАЧАЛО: СУХАРИ 2, САХАР 2, ПОСУДА 4+4+1",
-        "СКЛАД 14 14",
-        "ПОС 20 20 17",
-        "ENTER - НАЧАТЬ (ОБУЧЕНИЕ)",
+        "НАЧАЛО: ЗАКУПИТЕ СУХАРИ (1), САХАР (2) И ПОСУДУ (3) - ИЛИ СРАЗУ ЖМИТЕ ENTER",
+        "СУХАРИ КОНЧИЛИСЬ — КУПИТЕ (1) НА СКЛАДЕ",
+        "ПРИЛАВОК - ОТДАТЬ КВАС ПОКУПАТЕЛЮ",
+        "Б2 ГОТОВА 13/20 12С",
         "Дай, внучек, стаканчик квасика, холодненький...",
     ] {
-        println!("font.width({s:?}) = {}", font.width(s));
+        println!("font.w({s:?}) = {} px", font.w(s, SZ_M));
     }
-    // образцы реальных строк (масштаб1, как в игре)
-    let samples = [
-        "ПРИЛАВОК: E - ОТДАТЬ ПОКУПАТЕЛЮ",
-        "Б2 ГОТОВА 13/20 12",
-        "ШАГ 4/7. К БОЧКЕ: E ТРИЖДЫ (СУХАРИ-ВОДА-САХАР)",
-        "Дай, внучек, стаканчик квасика...",
-        "НАЧАЛО. СУХАРИ 2, САХАР 2, ПОСУДА 4+4+1",
-    ];
-    let sy0 = ry.max(124);
-    let sy1 = sy0 + samples.len() as i32 * font.line_at(1);
-    rect(buf, SCREEN_W, SCREEN_H, 0, sy0, UI_W, sy1 - sy0, idx::SHADOW);
-    let mut sy = sy0;
-    for r in samples.iter() {
-        font.draw(buf, SCREEN_W, SCREEN_H, 3, sy, r, idx::LAMP, Some(idx::BLACK));
-        sy += font.line_at(1);
-    }
-    let ty = (sy + 2).max(0).min(UI_H - 14);
-    rect(buf, SCREEN_W, SCREEN_H, 0, ty, UI_W, (UI_H - ty).max(1), idx::CEILING);
-    font.draw_fit(buf, SCREEN_W, SCREEN_H, 4, ty, UI_W - 8, "КВАСНАЯ ЛАВКА", idx::LAMP, Some(idx::BLACK), 2);
-    renderer.present();
-    write_bmp(&out.join("6_font.bmp"), &renderer.rgba);
+    let long = "НАЧАЛО: ЗАКУПИТЕ СУХАРИ (1), САХАР (2) И ПОСУДУ (3) - ИЛИ СРАЗУ ЖМИТЕ ENTER";
+    let fitted = font.fit(long, CV_W - 48, SZ_L);
+    println!(
+        "font.fit(длинная, 1232, 30) = {fitted} (тогда ширина {})",
+        font.w(long, fitted)
+    );
+    snap(&canvas, None, "6_font.bmp");
 
-    // --- 7. Обучение: панель инструкции + мигающий маркер на бочку ---
+    // --- 7. Обучение: панель инструкции + мигающий маркер ---
     let state = GameState {
         phase: Phase::Tutorial,
         tut_step: 6,
@@ -284,19 +234,20 @@ pub fn run() {
         msg_t: 3.0,
         ..Default::default()
     };
-    let tut_renders = vec![ui::CustomerRender {
-        kind: NpcKind::Grandma,
-        pos: Vec2::new(3.5, 2.7),
-        bubble: None,
-    }];
-    let tut_view = ui::CustomerView { list: &tut_renders };
+    let tut_cust = vec![(Vec2::new(3.5, 2.7), None)];
     renderer.render(&map, &textures, &cam, 1.0);
     renderer.draw_sprites(&sprites, &[(Vec2::new(3.5, 2.7), NpcKind::Grandma)], &cam, 1.0);
-    ui::draw_frame(&mut renderer, &font, &state, &inv, &barrels, &no_qte, &tut_view, 1.5, &cam, &map);
     renderer.present();
-    write_bmp(&out.join("7_tutorial.bmp"), &renderer.rgba);
+    let world_b = renderer.rgba.clone();
+    canvas.clear();
+    ui::draw_frame(
+        &mut canvas, &font, &state, &inv, &barrels, &no_qte, &tut_cust, 1.5, &cam, &map,
+    );
+    snap(&canvas, Some(&world_b), "7_tutorial.bmp");
 
     // --- 8. Лист персонажей (проверка образов NPC) ---
+    canvas.clear();
+    canvas.rect(0, 0, CV_W, CV_H, [36, 30, 22], 255);
     {
         let kinds = [
             NpcKind::Grandma,
@@ -307,31 +258,32 @@ pub fn run() {
             NpcKind::Hooligan,
             NpcKind::Sanepid,
         ];
-        let buf = &mut renderer.indices;
-        buf.fill(idx::CEILING);
         for (i, k) in kinds.iter().enumerate() {
             let spr = sprites.npc_sprite(*k);
-            let ox = 6 + i as i32 * 44;
+            let ox = 60 + i as i32 * 172;
             for y in 0..64 {
                 for x in 0..32 {
-                    let c = spr[y * 32 + x];
-                    if c == crate::sprites::TRANSPARENT {
+                    let color = spr[y * 32 + x];
+                    if color == crate::sprites::TRANSPARENT {
                         continue;
                     }
-                    for dy in 0..2 {
-                        for dx in 0..2 {
-                            rect(buf, SCREEN_W, SCREEN_H, ox + x as i32 * 2 + dx, 20 + y as i32 * 2 + dy, 1, 1, c);
-                        }
-                    }
+                    let rgb = crate::palette::PALETTE[color as usize];
+                    canvas.rect(ox + x as i32 * 4, 60 + y as i32 * 4, 4, 4, rgb, 255);
                 }
             }
-            font.draw(buf, SCREEN_W, SCREEN_H, ox, 152, k.name(), idx::LAMP, Some(idx::BLACK));
+            font.draw_sh(&mut canvas, ox - 10, 340, k.name(), SZ_S, ui::col::LAMP, 255);
         }
-        font.draw(buf, SCREEN_W, SCREEN_H, 4, 170, "БАБУШКА РАБОЧИЙ МАМА СТУДЕНТ МИЛИЦИОНЕР", idx::WHITE, Some(idx::BLACK));
-        font.draw(buf, SCREEN_W, SCREEN_H, 4, 180, "ХУЛИГАН САНЭПИД", idx::WHITE, Some(idx::BLACK));
-        renderer.present();
-        write_bmp(&out.join("8_npcs.bmp"), &renderer.rgba);
+        font.draw(
+            &mut canvas,
+            60,
+            400,
+            "БАБУШКА РАБОЧИЙ МАМА СТУДЕНТ МИЛИЦИОНЕР ХУЛИГАН САНЭПИД",
+            SZ_M,
+            ui::col::WHITE,
+            255,
+        );
     }
+    snap(&canvas, None, "8_npcs.bmp");
 
     // --- 9. Только мир + спрайты (без HUD) — проверка видимости людей ---
     renderer.render(&map, &textures, &cam, 1.0);
@@ -342,11 +294,9 @@ pub fn run() {
         1.0,
     );
     renderer.present();
-    write_bmp(&out.join("9_spriteonly.bmp"), &renderer.rgba);
+    write_bmp_world(&out.join("9_spriteonly.bmp"), &renderer.rgba);
 
-    // --- 10. Камера вплотную к прилавку (0.15 тайла) — раньше при таком
-    //     расстоянии он схлопывался до фиксированной высоты (баг «сжатия»).
-    //     Спрайт бабушки вблизи — проверка масштаба людей.
+    // --- 10. Камера вплотную к прилавку — проверка масштаба людей ---
     let close_cam = GameCam {
         x: 5.5,
         y: 4.15,
@@ -355,9 +305,9 @@ pub fn run() {
     renderer.render(&map, &textures, &close_cam, 1.0);
     renderer.draw_sprites(&sprites, &[(Vec2::new(3.5, 2.7), NpcKind::Grandma)], &close_cam, 1.0);
     renderer.present();
-    write_bmp(&out.join("10_close.bmp"), &renderer.rgba);
+    write_bmp_world(&out.join("10_close.bmp"), &renderer.rgba);
 
-    // --- 11. Камера вплотную к обычной стене (0.3 тайла) ---
+    // --- 11. Камера вплотную к обычной стене ---
     let wall_cam = GameCam {
         x: 1.3,
         y: 4.0,
@@ -365,7 +315,7 @@ pub fn run() {
     };
     renderer.render(&map, &textures, &wall_cam, 1.0);
     renderer.present();
-    write_bmp(&out.join("11_wallclose.bmp"), &renderer.rgba);
+    write_bmp_world(&out.join("11_wallclose.bmp"), &renderer.rgba);
 
     // --- 12. Полоска ускорения брожения (мини-игра на ПРОБЕЛЕ) ---
     let qte = BrewQte {
@@ -382,7 +332,7 @@ pub fn run() {
         phase: Phase::Playing,
         day: 1,
         money: 12,
-        norm: 90,
+        norm: norm_for(1),
         day_earned: 12,
         time_left: 300.0,
         msg: "САХАР ДОБАВЛЕН. БРОДИТ ~70 СЕК. ПРОБЕЛ — УСКОРИТЬ".into(),
@@ -398,28 +348,104 @@ pub fn run() {
         stock_jar: 2,
         stock_bottle: 1,
     };
-    let qte_renders = vec![ui::CustomerRender {
-        kind: NpcKind::Worker,
-        pos: Vec2::new(5.5, 2.7),
-        bubble: Some("Ну и как там, бродит?".into()),
-    }];
-    let qte_view = ui::CustomerView { list: &qte_renders };
+    let qte_cust = vec![(Vec2::new(5.5, 2.7), Some("Ну и как там, бродит?".into()))];
     renderer.render(&map, &textures, &cam, 1.0);
-    renderer.draw_sprites(
-        &sprites,
-        &[(Vec2::new(5.5, 2.7), NpcKind::Worker)],
-        &cam,
-        1.0,
-    );
-    ui::draw_frame(&mut renderer, &font, &qte_state, &qte_inv, &barrels, &qte, &qte_view, 6.0, &cam, &map);
+    renderer.draw_sprites(&sprites, &[(Vec2::new(5.5, 2.7), NpcKind::Worker)], &cam, 1.0);
     renderer.present();
-    write_bmp(&out.join("12_qte.bmp"), &renderer.rgba);
+    let world_c = renderer.rgba.clone();
+    canvas.clear();
+    ui::draw_frame(
+        &mut canvas,
+        &font,
+        &qte_state,
+        &qte_inv,
+        &barrels,
+        &qte,
+        &qte_cust,
+        6.0,
+        &cam,
+        &map,
+    );
+    snap(&canvas, Some(&world_c), "12_qte.bmp");
+
+    // --- 13. Пауза (ESC): меню поверх приглушенного мира ---
+    let pause_state = GameState {
+        phase: Phase::Paused,
+        day: 2,
+        money: 47,
+        norm: norm_for(2),
+        day_earned: 60,
+        time_left: 137.0,
+        pause_prev: PAUSE_FROM_PLAYING,
+        pause_sel: 0,
+        tut_done: true,
+        ..Default::default()
+    };
+    canvas.clear();
+    ui::draw_frame(
+        &mut canvas,
+        &font,
+        &pause_state,
+        &inv,
+        &barrels,
+        &no_qte,
+        &custs,
+        3.5,
+        &cam,
+        &map,
+    );
+    snap(&canvas, Some(&world_a), "13_pause.bmp");
+
+    // --- 14. Посуда кончилась: предупреждение сверху + красные нули на складе ---
+    let no_inv = Inventory {
+        hands: [None; 4],
+        selected: 0,
+        stock_croutons: 0,
+        stock_sugar: 0,
+        stock_glass: 0,
+        stock_jar: 0,
+        stock_bottle: 0,
+    };
+    let warn_state = GameState {
+        phase: Phase::Playing,
+        day: 1,
+        money: 5,
+        norm: norm_for(1),
+        day_earned: 0,
+        time_left: 60.0,
+        msg: "ПОСУДА КОНЧИЛАСЬ — КУПИТЕ (3) НА СКЛАДЕ ЗАВТРА".into(),
+        msg_t: 3.0,
+        ..Default::default()
+    };
+    let empty_barrels = Barrels::from_map(&map);
+    canvas.clear();
+    ui::draw_frame(
+        &mut canvas,
+        &font,
+        &warn_state,
+        &no_inv,
+        &empty_barrels,
+        &no_qte,
+        &no_cust,
+        2.2,
+        &cam,
+        &map,
+    );
+    snap(&canvas, Some(&world_c), "14_noposuda.bmp");
 
     println!("selftest: кадры записаны в {}/", out.display());
 }
 
+/// Кадр мира 640×400 (нижний слой, без UI).
+fn write_bmp_world(path: &Path, rgba: &[u8]) {
+    write_bmp_sized(path, rgba, SCREEN_W, SCREEN_H);
+}
+
 fn write_bmp(path: &Path, rgba: &[u8]) {
-    let (w, h) = (SCREEN_W, SCREEN_H);
+    write_bmp_sized(path, rgba, CV_W as usize, CV_H as usize);
+}
+
+fn write_bmp_sized(path: &Path, rgba: &[u8], w: usize, h: usize) {
     let row = (w * 3 + 3) & !3;
     let data_len = row * h;
     let file_len = 54 + data_len;

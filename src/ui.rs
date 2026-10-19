@@ -1,877 +1,1035 @@
-//! HUD (Doom-статусбар), облачка диалогов, экраны меню — всё рисуется
-//! прямо в палитровом буфере 320x200.
+//! UI «Квасной лавки» на RGBA-канвасе 1280×800.
+//!
+//! Стиль — советская лавка: тёмные эмалевые таблички с заклёпками, красные
+//! ленты «КВАС», бумажные ведомости на экранах, янтарные цифры кассы.
+//! Мир остаётся палитровым рейкастером 640×400 (нижний слой), а весь
+//! интерфейс рисуется на прозрачном канвасе поверх: текст плотнопиксельный,
+//! читаемый, у каждой надписи своя подложка — ничего не налезает на текстуры.
 
-use crate::brewing::{BarrelPhase, BarrelSignal, Barrels, BrewQte};
-use crate::customer::Customer;
-use crate::day_cycle::{GameState, Phase};
-use crate::font::{frame_rect, put, rect, Font};
+use crate::brewing::{BarrelPhase, Barrels, BrewQte, BARREL_PORTIONS, QTE_BONUS, seconds_to_next};
+use crate::canvas::{Canvas, CV_H, CV_W};
+use crate::day_cycle::{GameState, Phase, day_len};
+use crate::font::{Font, SZ_H, SZ_L, SZ_M, SZ_S, SZ_T, SZ_XL};
 use crate::inventory::{HandItem, Inventory};
-use crate::palette::idx;
-use crate::raycaster::{GameCam, Renderer, SCREEN_H, SCREEN_W, UI_H, UI_HORIZON, UI_W};
-use crate::sprites::{vessel_icon, NpcKind, Vessel, TRANSPARENT};
+use crate::map::{Map, Tile};
+use crate::palette::PALETTE;
+use crate::raycaster::{GameCam, HORIZON, SCREEN_H};
+use crate::sprites::{Vessel, TRANSPARENT, vessel_icon};
 
-pub const BAR_Y: i32 = 168;
+use bevy::prelude::Vec2;
 
+// --- Цвета (те же краски, что в палитре мира, как RGBA) ---
+
+pub mod col {
+    pub const KVASS_L: [u8; 3] = [232, 184, 75];
+    pub const KVASS: [u8; 3] = [184, 115, 51];
+    pub const KVASS_D: [u8; 3] = [107, 58, 20];
+    pub const WOOD: [u8; 3] = [200, 159, 107];
+    pub const WOOD_D: [u8; 3] = [122, 82, 48];
+    pub const TILE: [u8; 3] = [154, 168, 154];
+    pub const TILE_D: [u8; 3] = [92, 107, 92];
+    pub const PLASTER: [u8; 3] = [201, 192, 168];
+    pub const RED: [u8; 3] = [194, 46, 46];
+    pub const RED_D: [u8; 3] = [122, 26, 26];
+    pub const GREEN: [u8; 3] = [46, 107, 58];
+    pub const METAL: [u8; 3] = [138, 143, 148];
+    pub const METAL_D: [u8; 3] = [74, 78, 82];
+    pub const WHITE: [u8; 3] = [232, 228, 216];
+    pub const BLACK: [u8; 3] = [18, 14, 11];
+    pub const SHAD: [u8; 3] = [36, 30, 22];
+    pub const LAMP: [u8; 3] = [255, 232, 160];
+    pub const INK: [u8; 3] = [26, 21, 17];
+    pub const SKY: [u8; 3] = [135, 168, 201];
+    pub const LEAVES: [u8; 3] = [74, 122, 58];
+}
+
+// --- Константы вёрстки ---
+
+/// Нижняя полка HUD: y 672..800 (бывший BAR_Y=168 в дизайн-координатах, ×4).
+pub const BAR_Y: i32 = 672;
+/// Полоса уведомлений над полкой.
+pub const MSG_Y: i32 = 628;
+/// Полоска подсказки «что перед вами».
+pub const HINT_Y: i32 = 580;
+
+fn blink(t: f32, hz: f32) -> bool {
+    (t * hz) as i32 % 2 == 0
+}
+
+// =================== Точка входа ===================
+
+/// customers: (позиция в мире, текст облачка, если есть).
+#[allow(clippy::too_many_arguments)]
 pub fn draw_frame(
-    renderer: &mut Renderer,
+    canvas: &mut Canvas,
     font: &Font,
     state: &GameState,
     inv: &Inventory,
     barrels: &Barrels,
-    qte: &crate::brewing::BrewQte,
-    customers: &CustomerView<'_>,
+    qte: &BrewQte,
+    customers: &[(Vec2, Option<String>)],
     t: f32,
     cam: &GameCam,
-    map: &crate::map::Map,
+    map: &Map,
 ) {
     match state.phase {
-        Phase::Menu => draw_menu(&mut renderer.indices, font, t),
-        Phase::Shopping => draw_shopping(&mut renderer.indices, font, state, inv, t),
-        Phase::DayEnd => draw_dayend(&mut renderer.indices, font, state, t),
-        Phase::Final => draw_final(&mut renderer.indices, font, t),
-        Phase::Tutorial => {
+        Phase::Menu => draw_menu(canvas, font, t),
+        Phase::Shopping => draw_shopping(canvas, font, state, inv, t),
+        Phase::DayEnd => draw_dayend(canvas, font, state, t),
+        Phase::Final => draw_final(canvas, font, t),
+        Phase::Paused => {
             let bubbles = bubble_layout(customers, font, cam);
-            draw_hud(&mut renderer.indices, font, state, inv, barrels, qte, t, map, cam, &bubbles);
-            draw_bubbles(&mut renderer.indices, font, &bubbles);
-            draw_tutorial(&mut renderer.indices, font, state, customers, cam, t);
+            draw_hud(canvas, font, state, inv, barrels, qte, t, map, cam, &bubbles);
+            canvas.dim(150);
+            draw_pause(canvas, font, state);
         }
-        Phase::Playing => {
+        Phase::Playing | Phase::Tutorial => {
             let bubbles = bubble_layout(customers, font, cam);
-            draw_hud(&mut renderer.indices, font, state, inv, barrels, qte, t, map, cam, &bubbles);
-            draw_bubbles(&mut renderer.indices, font, &bubbles);
+            draw_hud(canvas, font, state, inv, barrels, qte, t, map, cam, &bubbles);
+            draw_bubbles(canvas, font, &bubbles);
+            if state.phase == Phase::Tutorial {
+                draw_tutorial(canvas, font, state, customers, cam, t);
+            }
         }
     }
 }
 
-/// Список покупателей для рендера/облачков.
-pub struct CustomerView<'a> {
-    pub list: &'a [CustomerRender],
+// =================== Панели и утилиты ===================
+
+/// Тёмная эмалевая табличка с заклёпками по углам.
+fn panel(c: &mut Canvas, x: i32, y: i32, w: i32, h: i32) {
+    c.rect(x + 4, y + 4, w, h, [0, 0, 0], 90);
+    c.rect(x, y, w, h, col::SHAD, 248);
+    c.rect(x, y, w, 2, col::WHITE, 50);
+    c.rect(x, y + h - 2, w, 2, [0, 0, 0], 110);
+    c.rect(x, y, 2, h, col::WHITE, 30);
+    c.rect(x + w - 2, y, 2, h, [0, 0, 0], 60);
+    for (rx, ry) in [
+        (x + 6, y + 6),
+        (x + w - 9, y + 6),
+        (x + 6, y + h - 9),
+        (x + w - 9, y + h - 9),
+    ] {
+        c.rect(rx, ry, 3, 3, col::METAL, 220);
+    }
 }
 
-pub struct CustomerRender {
-    pub kind: NpcKind,
-    pub pos: Vec2,
-    pub bubble: Option<String>,
+/// Красная лента-вывеска.
+fn red_plate(c: &mut Canvas, x: i32, y: i32, w: i32, h: i32) {
+    c.rect(x + 4, y + 4, w, h, [0, 0, 0], 110);
+    c.rect(x, y, w, h, col::RED, 255);
+    c.rect(x, y, w, 2, col::WHITE, 60);
+    c.rect(x, y + h - 2, w, 2, col::RED_D, 255);
+    c.frame(x, y, w, h, col::BLACK, 255);
 }
 
-use bevy::prelude::Vec2;
+/// Линейка прогресса.
+fn bar(c: &mut Canvas, x: i32, y: i32, w: i32, h: i32, frac: f32, fill: [u8; 3]) {
+    c.rect(x, y, w, h, [16, 13, 10], 230);
+    c.frame(x, y, w, h, col::BLACK, 255);
+    let wl = ((w - 2) as f32 * frac.clamp(0.0, 1.0)).max(0.0) as i32;
+    if wl > 0 {
+        c.rect(x + 1, y + 1, wl, h - 2, fill, 255);
+        c.rect(x + 1, y + 1, wl, 1, col::WHITE, 70);
+    }
+}
 
-/// Рассчитанное облачко речи (его прямоугольник) — чтобы HUD мог его пропустить.
+/// Клавиша-кейкап; возвращает ширину.
+fn keycap(c: &mut Canvas, font: &Font, x: i32, y: i32, h: i32, key: &str) -> i32 {
+    let w = (font.w(key, SZ_S) + 22).max(34);
+    c.rect(x + 2, y + 3, w, h, [0, 0, 0], 140);
+    c.rect(x, y, w, h, col::TILE, 255);
+    c.rect(x, y, w, 2, col::WHITE, 90);
+    c.rect(x, y + h - 2, w, 2, col::TILE_D, 255);
+    c.frame(x, y, w, h, col::INK, 255);
+    let tx = x + (w - font.w(key, SZ_S)) / 2;
+    font.draw(c, tx, y + (h - font.cap_h(SZ_S)) / 2, key, SZ_S, col::INK, 255);
+    w
+}
+
+/// Иконка 16×16 из палитрового спрайтсета с масштабом.
+fn blit_icon(c: &mut Canvas, icon: &[u8], x: i32, y: i32, scale: i32) {
+    for iy in 0..16i32 {
+        for ix in 0..16i32 {
+            let t = icon[(iy * 16 + ix) as usize];
+            if t == TRANSPARENT {
+                continue;
+            }
+            let rgb = PALETTE[t as usize];
+            for dy in 0..scale {
+                for dx in 0..scale {
+                    c.blend(x + ix * scale + dx, y + iy * scale + dy, rgb, 255);
+                }
+            }
+        }
+    }
+}
+
+/// Бумажный лист «квитанции».
+fn paper_panel(c: &mut Canvas, x: i32, y: i32, w: i32, h: i32) {
+    c.rect(x + 6, y + 6, w, h, [0, 0, 0], 120);
+    c.rect(x, y, w, h, col::PLASTER, 255);
+    c.frame(x, y, w, h, col::BLACK, 255);
+    c.frame(x + 3, y + 3, w - 6, h - 6, col::RED, 120);
+}
+
+// =================== Игровой HUD ===================
+
 struct Bubble {
     bx: i32,
     by: i32,
     w: i32,
     h: i32,
     screen_x: i32,
-    lines: [String; 2],
+    lines: Vec<String>,
 }
 
 impl Bubble {
-    /// Пересекаются ли прямоугольники.
     fn hits(&self, x: i32, y: i32, w: i32, h: i32) -> bool {
         self.bx < x + w && self.bx + self.w > x && self.by < y + h && self.by + self.h > y
     }
 }
 
-fn bubble_layout(view: &CustomerView<'_>, font: &Font, cam: &GameCam) -> Vec<Bubble> {
+fn bubble_layout(
+    customers: &[(Vec2, Option<String>)],
+    font: &Font,
+    cam: &GameCam,
+) -> Vec<Bubble> {
     let dir_x = cam.angle.cos();
     let dir_y = cam.angle.sin();
     let plane_x = -dir_y * 0.66;
     let plane_y = dir_x * 0.66;
     let inv_det = 1.0 / (plane_x * dir_y - dir_x * plane_y);
+    let ts = SZ_M;
     let mut out = Vec::new();
-    for c in view.list.iter() {
-        let Some(text) = &c.bubble else { continue };
-        let sx = c.pos.x - cam.x;
-        let sy = c.pos.y - cam.y;
+    for (pos, text) in customers {
+        let Some(text) = text else { continue };
+        let sx = pos.x - cam.x;
+        let sy = pos.y - cam.y;
         let tx = inv_det * (dir_y * sx - dir_x * sy);
         let ty = inv_det * (-plane_y * sx + plane_x * sy);
         if ty <= 0.2 {
             continue;
         }
-        let screen_x = ((UI_W as f32 / 2.0) * (1.0 + tx / ty)) as i32;
-        // верх головы — как у спрайта в рендере (масштаб 1.2, без клампа —
-        // иначе у близко стоящего человека пузырь съезжал бы вниз)
-        let sprite_h = (UI_H as f32 / ty * 1.2) as i32;
-        let feet = UI_HORIZON + (0.5 * UI_H as f32 / ty) as i32;
+        let screen_x = ((CV_W as f32 / 2.0) * (1.0 + tx / ty)) as i32;
+        // масштаб Head Up: спрайт рисуется высотой SCREEN_H/d*1.2 в буфере,
+        // канвас — ×2 к буферу.
+        let sprite_h = ((SCREEN_H as f32 / ty) * 1.2 * 2.0) as i32;
+        let feet = ((HORIZON as f32 + (0.5 * SCREEN_H as f32) / ty) * 2.0) as i32;
         let top = feet - sprite_h;
-        // перенос текста на 2 строки
-        let max_chars = 26;
-        let words: Vec<&str> = text.split(' ').collect();
-        let mut lines = [String::new(), String::new()];
-        for w in words {
-            let li = if lines[0].is_empty() {
-                0
-            } else if lines[0].chars().count() + w.chars().count() + 1 <= max_chars
-                && lines[1].is_empty()
-            {
-                0
-            } else {
-                1
-            };
-            if !lines[li].is_empty() {
+
+        // перенос слов: строка ≤ 430 px
+        let mut lines: Vec<String> = vec![String::new()];
+        for word in text.split(' ') {
+            let li = lines.len() - 1;
+            let cand_w = font.w(&lines[li], ts) + font.w(word, ts) + font.w(" ", ts);
+            if !lines[li].is_empty() && cand_w <= 430 {
                 lines[li].push(' ');
+                lines[li].push_str(word);
+            } else if !lines[li].is_empty() {
+                lines.push(String::from(word));
+            } else {
+                lines[li].push_str(word);
             }
-            lines[li].push_str(w);
         }
-        let w = font.width(&lines[0]).max(font.width(&lines[1])) as i32 + 8;
-        let h = if lines[1].is_empty() { 13 } else { 25 };
-        if screen_x < -w || screen_x > UI_W + w {
+        let w = lines
+            .iter()
+            .map(|l| font.w(l, ts))
+            .max()
+            .unwrap_or(0)
+            .max(font.w("И", ts))
+            + 24;
+        let h = lines.len() as i32 * font.line(ts) + 20;
+        if screen_x + w < 0 || screen_x - w > CV_W {
             continue;
         }
-        // прижимаем облачко к краям экрана, чтобы текст не уходил за кадр
-        let bx = (screen_x - w / 2).clamp(0, UI_W - w);
-        let by = top - h - 4;
-        if by < 0 {
+        let bx = (screen_x - w / 2).clamp(8, CV_W - 8 - w);
+        // не залезаем на панель дня/нормы в правом верхнем углу
+        let panel_x0 = CV_W - 8 - 300;
+        let by = top - h - 12;
+        let bx = if by < 152 && bx + w > panel_x0 {
+            (panel_x0 - w - 8).max(8)
+        } else {
+            bx
+        };
+        if by < 4 || top < 0 {
             continue;
         }
-        out.push(Bubble { bx, by, w, h, screen_x, lines });
+        out.push(Bubble {
+            bx,
+            by,
+            w,
+            h,
+            screen_x,
+            lines,
+        });
     }
     out
 }
 
-/// Облачко речи над головой + текст.
-fn draw_bubbles(buf: &mut [u8], font: &Font, bubbles: &[Bubble]) {
+fn draw_bubbles(c: &mut Canvas, font: &Font, bubbles: &[Bubble]) {
+    let ts = SZ_M;
     for b in bubbles {
-        // облачко
-        rect(buf, SCREEN_W, SCREEN_H, b.bx, b.by, b.w, b.h, idx::WHITE);
-        frame_rect(buf, SCREEN_W, SCREEN_H, b.bx, b.by, b.w, b.h, idx::BLACK);
-        // хвостик к голове
-        put(buf, SCREEN_W, SCREEN_H, b.screen_x - 1, b.by + b.h, idx::BLACK);
-        put(buf, SCREEN_W, SCREEN_H, b.screen_x, b.by + b.h + 1, idx::BLACK);
-        put(buf, SCREEN_W, SCREEN_H, b.screen_x + 1, b.by + b.h, idx::BLACK);
-        font.draw(buf, SCREEN_W, SCREEN_H, b.bx + 4, b.by + 2, &b.lines[0], idx::BLACK, None);
-        if !b.lines[1].is_empty() {
-            font.draw(buf, SCREEN_W, SCREEN_H, b.bx + 4, b.by + 14, &b.lines[1], idx::BLACK, None);
+        c.rect(b.bx + 4, b.by + 4, b.w, b.h, [0, 0, 0], 110);
+        c.rect(b.bx, b.by, b.w, b.h, col::WHITE, 250);
+        c.frame(b.bx, b.by, b.w, b.h, col::BLACK, 255);
+        // хвостика вниз к голове
+        for dy in 0..8 {
+            let spread = 1 + dy / 3;
+            c.rect(b.screen_x - spread, b.by + b.h + dy, spread * 2, 2, col::WHITE, 250);
+            if dy < 7 {
+                c.rect(b.screen_x - spread, b.by + b.h + dy + 2, spread * 2, 1, col::BLACK, 255);
+            }
+        }
+        let mut ly = b.by + 10;
+        for l in &b.lines {
+            font.draw(c, b.bx + 12, ly, l, ts, col::INK, 255);
+            ly += font.line(ts);
         }
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_hud(
-    buf: &mut [u8],
+    c: &mut Canvas,
     font: &Font,
     state: &GameState,
     inv: &Inventory,
     barrels: &Barrels,
     qte: &BrewQte,
     t: f32,
-    map: &crate::map::Map,
+    map: &Map,
     cam: &GameCam,
     bubbles: &[Bubble],
 ) {
-    // --- Индикаторы бочек (сверху слева) ---
+    // --- Таблички бочек (верхний левый угол) ---
     let mut keys: Vec<(i32, i32)> = barrels.map.keys().copied().collect();
     keys.sort();
     for (i, k) in keys.iter().enumerate() {
         let b = &barrels.map[k];
-        let x = 2;
-        let y = 2 + i as i32 * 14;
-        let (bg, text): (u8, String) = match b.phase {
+        let (led, text): ([u8; 3], String) = match b.phase {
             BarrelPhase::Empty => {
                 let s = match b.step {
-                    0 => format!("Б{} ПУСТА", i + 1),
-                    1 => format!("Б{} +СУХАРИ", i + 1),
-                    _ => format!("Б{} +ВОДА", i + 1),
+                    0 => format!("Б{} ПУСТАЯ", i + 1),
+                    1 => format!("Б{} СУХАРИ+ВОДА", i + 1),
+                    _ => format!("Б{} НУЖЕН САХАР", i + 1),
                 };
-                (idx::METAL_DARK, s)
+                (col::TILE_D, s)
             }
-            BarrelPhase::Ferment(p) => (idx::KVASS_MID, format!("Б{} БРОДИТ {}%", i + 1, p as i32)),
-            BarrelPhase::Ready(p) => {
-                let pulse = if (t * 4.0) as i32 % 2 == 0 { true } else { false };
-                let bg = if pulse { idx::GREEN } else { idx::KVASS_LIGHT };
-                (
-                    bg,
-                    format!(
-                        "Б{} ГОТОВА {}% {}/{} {:.0}",
-                        i + 1,
-                        p as i32,
-                        b.portions,
-                        crate::brewing::BARREL_PORTIONS,
-                        crate::brewing::seconds_to_next(b)
-                    ),
-                )
-            }
-            BarrelPhase::Overripe(p) => {
-                let pulse = (t * 6.0) as i32 % 2 == 0;
-                let bg = if pulse { idx::RED } else { idx::RED_DARK };
-                (
-                    bg,
-                    format!(
-                        "Б{} ПЕРЕБРОД {}% {:.0}!",
-                        i + 1,
-                        p as i32,
-                        crate::brewing::seconds_to_next(b)
-                    ),
-                )
-            }
-            BarrelPhase::Ruined => (idx::BLACK, format!("Б{} ГРЯЗЬ! МОЙТЕ", i + 1)),
+            BarrelPhase::Ferment(p) => (col::KVASS_L, format!("Б{} БРОДИТ {}%", i + 1, p as i32)),
+            BarrelPhase::Ready(p) => (
+                if blink(t, 4.0) { col::LAMP } else { col::KVASS_L },
+                format!(
+                    "Б{} ГОТОВА {}/{}, {:.0}С",
+                    i + 1,
+                    b.portions,
+                    BARREL_PORTIONS,
+                    seconds_to_next(b)
+                ),
+            ),
+            BarrelPhase::Overripe(p) => (
+                if blink(t, 6.0) { col::LAMP } else { col::RED },
+                format!("Б{} ПЕРЕБРОД {}% {:.0}С!", i + 1, p as i32, seconds_to_next(b)),
+            ),
+            BarrelPhase::Ruined => (col::RED, format!("Б{} ГРЯЗЬ! МОЙТЬ (E)", i + 1)),
         };
-        let w = font.width(&text) as i32 + 6;
-        // облачко речи важнее: если оно накрыло индикатор — не рисуем индикатор
-        if bubbles.iter().any(|b| b.hits(x, y, w, 13)) {
-            continue;
+        let x = 8;
+        let y = 8 + i as i32 * 46;
+        let w = font.w(&text, SZ_S) + 56;
+        if bubbles.iter().any(|b| b.hits(x, y, w, 40)) {
+            continue; // облачко важнее
         }
-        rect(buf, SCREEN_W, SCREEN_H, x, y, w, 13, bg);
-        frame_rect(buf, SCREEN_W, SCREEN_H, x, y, w, 13, idx::BLACK);
-        font.draw(
-            buf,
-            SCREEN_W,
-            SCREEN_H,
-            x + 3,
-            y + 2,
-            &text,
-            if bg == idx::BLACK { idx::RED } else { idx::WHITE },
-            Some(idx::BLACK),
+        panel(c, x, y, w, 40);
+        c.rect(x + 10, y + 15, 5, 5, led, 255);
+        font.draw(c, x + 26, y + 9, &text, SZ_S, col::WHITE, 255);
+        // тревожная рамка: последние проценты брожения
+        if matches!(b.phase, BarrelPhase::Ferment(p) if p >= 90.0) && blink(t, 6.0) {
+            c.frame(x - 3, y - 3, w + 6, 46, col::LAMP, 255);
+        }
+    }
+
+    // --- День/время/норма (верхний правый угол) --- всегда видима
+    {
+        let pw = 300i32;
+        let x = CV_W - 8 - pw;
+        let y = 8;
+        let ph = 136;
+        panel(c, x, y, pw, ph);
+        let day = format!("ДЕНЬ {}   НОРМА {} К.", state.day, state.norm);
+        font.draw(c, x + 20, y + 12, &day, SZ_S, col::WHITE, 255);
+        // ход времени
+        let tp = (state.time_left / day_len(state.day)).clamp(0.0, 1.0);
+        bar(c, x + 20, y + 42, pw - 40, 12, tp, col::KVASS);
+        let mins = (state.time_left / 60.0) as i32;
+        let secs = (state.time_left as i32) % 60;
+        let to_end = format!("КОНЕЦ ДНЯ {:02}:{:02}", mins, secs);
+        font.draw(c, x + 20, y + 58, &to_end, SZ_S, col::LAMP, 255);
+        // норма
+        let frac = (state.day_earned as f32 / state.norm.max(1) as f32).clamp(0.0, 1.0);
+        let done = state.day_earned >= state.norm;
+        bar(
+            c,
+            x + 20,
+            y + 88,
+            pw - 40,
+            12,
+            frac,
+            if done { col::GREEN } else { col::KVASS_L },
         );
-        // мигание иконки при AlmostReady (последние 10%) / переброде
-        if matches!(b.phase, BarrelPhase::Ferment(tt) if tt >= 90.0) && (t * 6.0) as i32 % 2 == 0
-        {
-            frame_rect(buf, SCREEN_W, SCREEN_H, x - 1, y - 1, w + 2, 15, idx::LAMP);
-        }
+        let earned = format!("{} / {} К.", state.day_earned, state.norm);
+        font.draw(
+            c,
+            x + 20,
+            y + 104,
+            &earned,
+            SZ_S,
+            if done { col::GREEN } else { col::TILE },
+            255,
+        );
+    }
+
+    // --- «Нужна посуда» (верх по центру, мигает) ---
+    let posuda_nul = inv.stock_glass + inv.stock_jar + inv.stock_bottle == 0;
+    if posuda_nul && state.phase == Phase::Playing && blink(t, 2.0) {
+        let warn = "ПОСУДА КОНЧИЛАСЬ! ЗАКУПИТЕ (3) ЗАВТРА";
+        let ww = font.w(warn, SZ_M) + 32;
+        let x = (CV_W - ww) / 2;
+        panel(c, x, 8, ww, 44);
+        c.rect(x + 2, 10, ww - 4, 40, col::RED_D, 255);
+        font.draw(c, x + 16, 17, warn, SZ_M, col::LAMP, 255);
     }
 
     // --- Статусбар снизу ---
-    for y in BAR_Y..UI_H {
-        for x in 0..UI_W {
-            let c = if (y - BAR_Y) % 4 == 0 {
-                idx::WOOD_DARK
-            } else {
-                idx::WOOD_LIGHT
-            };
-            put(buf, SCREEN_W, SCREEN_H, x, y, c);
-        }
+    c.rect(0, BAR_Y, CV_W, CV_H - BAR_Y, col::SHAD, 255);
+    c.rect(0, BAR_Y, CV_W, 4, col::WOOD_D, 255);
+    c.rect(0, BAR_Y + 4, CV_W, 2, col::BLACK, 200);
+    for y in (BAR_Y + 16..CV_H).step_by(28) {
+        c.rect(0, y, CV_W, 1, col::WOOD_D, 30);
     }
-    rect(buf, SCREEN_W, SCREEN_H, 0, BAR_Y, UI_W, 1, idx::BLACK);
 
-    // щиток «КВАС»
-    rect(buf, SCREEN_W, SCREEN_H, 2, BAR_Y + 3, 30, 12, idx::RED);
-    frame_rect(buf, SCREEN_W, SCREEN_H, 2, BAR_Y + 3, 30, 12, idx::BLACK);
-    font.draw_scaled(buf, SCREEN_W, SCREEN_H, 5, BAR_Y + 5, "КВАС", idx::WHITE, Some(idx::BLACK), 1);
+    // Касса (левый блок)
+    {
+        let x = 16;
+        font.draw(c, x, BAR_Y + 16, "КАССА", SZ_S, col::TILE, 255);
+        let money = format!("{} К.", state.money);
+        font.draw(c, x, BAR_Y + 46, &money, SZ_XL, col::LAMP, 255);
+    }
 
-    // касса и норма
-    font.draw(
-        buf,
-        SCREEN_W,
-        SCREEN_H,
-        36,
-        BAR_Y + 2,
-        &format!("{}К", state.money),
-        idx::LAMP,
-        Some(idx::BLACK),
-    );
-    font.draw(
-        buf,
-        SCREEN_W,
-        SCREEN_H,
-        36,
-        BAR_Y + 12,
-        &format!("НА {}К", state.norm),
-        idx::WHITE,
-        Some(idx::BLACK),
-    );
-    // полоска выполнения нормы
-    let p = (state.day_earned as f32 / state.norm as f32).clamp(0.0, 1.0);
-    rect(buf, SCREEN_W, SCREEN_H, 36, BAR_Y + 23, 40, 4, idx::SHADOW);
-    rect(buf, SCREEN_W, SCREEN_H, 36, BAR_Y + 23, (40.0 * p) as i32, 4, idx::KVASS_LIGHT);
-
-    // слоты рук (4)
+    // Слоты рук (4)
     for i in 0..4 {
-        let x = 90 + i as i32 * 22;
+        let x = 316 + i as i32 * 96;
+        let y = BAR_Y + 14;
         let selected = i == inv.selected;
-        rect(buf, SCREEN_W, SCREEN_H, x, BAR_Y + 3, 20, 26, idx::SHADOW);
-        frame_rect(
-            buf,
-            SCREEN_W,
-            SCREEN_H,
-            x,
-            BAR_Y + 3,
-            20,
-            26,
-            if selected { idx::LAMP } else { idx::BLACK },
-        );
-        font.draw(buf, SCREEN_W, SCREEN_H, x + 7, BAR_Y + 21, &format!("{}", i + 1), idx::WHITE, Some(idx::BLACK));
+        c.rect(x + 3, y + 4, 88, 88, [0, 0, 0], 130);
+        c.rect(x, y, 88, 88, col::METAL_D, 255);
+        let (fc, fn_) = if selected { (col::LAMP, 255u8) } else { (col::BLACK, 255u8) };
+        for k in 0..3 {
+            c.frame(x - k, y - k, 88 + k * 2, 88 + k * 2, fc, fn_);
+        }
+        font.draw(c, x + 6, y + 6, &format!("{}", i + 1), SZ_S, col::TILE, 200);
+        let iy = y + 16;
         match &inv.hands[i] {
             None => {}
             Some(item) => match item {
-                HandItem::Bucket => draw_bucket(buf, x + 2, BAR_Y + 5),
+                HandItem::Bucket => {
+                    // ведро: корпус, обод, дужка
+                    c.rect(x + 24, iy + 16, 40, 28, col::METAL, 255);
+                    c.frame(x + 24, iy + 16, 40, 28, col::INK, 255);
+                    c.rect(x + 22, iy + 12, 44, 6, col::METAL_D, 255);
+                    c.frame(x + 22, iy + 12, 44, 6, col::INK, 255);
+                    c.rect(x + 26, iy + 44, 36, 2, col::METAL_D, 255);
+                    // дужка
+                    for dx in [0, 1, 41, 42] {
+                        c.rect(x + 24 + dx, iy + 4, 2, 9, col::METAL_D, 255);
+                    }
+                    c.rect(x + 27, iy + 2, 34, 2, col::METAL_D, 255);
+                }
                 HandItem::Croutons(n) => {
-                    draw_croutons(buf, x + 2, BAR_Y + 5);
-                    font.draw(buf, SCREEN_W, SCREEN_H, x + 13, BAR_Y + 5, &format!("{}", n), idx::WHITE, Some(idx::BLACK));
+                    icon_croutons(c, x + 20, iy + 8);
+                    put_count(c, font, x, y, n);
                 }
                 HandItem::Sugar(n) => {
-                    draw_sugar(buf, x + 2, BAR_Y + 5);
-                    font.draw(buf, SCREEN_W, SCREEN_H, x + 13, BAR_Y + 5, &format!("{}", n), idx::WHITE, Some(idx::BLACK));
+                    icon_sugar(c, x + 28, iy + 4);
+                    put_count(c, font, x, y, n);
                 }
                 HandItem::Empty(v, n) => {
-                    blit_icon(buf, &vessel_icon(*v, false), x + 2, BAR_Y + 5);
-                    font.draw(buf, SCREEN_W, SCREEN_H, x + 13, BAR_Y + 5, &format!("{}", n), idx::WHITE, Some(idx::BLACK));
+                    blit_icon(c, &vessel_icon(*v, false), x + 20, iy, 3);
+                    put_count(c, font, x, y, n);
                 }
                 HandItem::Full(v, n, over) => {
-                    blit_icon(buf, &vessel_icon(*v, true), x + 2, BAR_Y + 5);
-                    font.draw(buf, SCREEN_W, SCREEN_H, x + 13, BAR_Y + 5, &format!("{}", n), idx::WHITE, Some(idx::BLACK));
-                    if *over && (t * 6.0) as i32 % 2 == 0 {
-                        frame_rect(buf, SCREEN_W, SCREEN_H, x + 1, BAR_Y + 4, 18, 17, idx::RED);
+                    blit_icon(c, &vessel_icon(*v, true), x + 20, iy, 3);
+                    put_count(c, font, x, y, n);
+                    if *over && blink(t, 6.0) {
+                        c.frame(x + 2, y + 2, 84, 84, col::RED, 255);
                     }
                 }
             },
         }
     }
 
-    // время дня / обучение без времени
-    if state.phase == Phase::Tutorial {
-        font.draw(
-            buf,
-            SCREEN_W,
-            SCREEN_H,
-            186,
-            BAR_Y + 3,
-            "ОБУЧЕНИЕ",
-            idx::WHITE,
-            Some(idx::BLACK),
-        );
-        font.draw(
-            buf,
-            SCREEN_W,
-            SCREEN_H,
-            186,
-            BAR_Y + 3 + font.line_at(1),
-            &format!("ШАГ {}/7", state.tut_step + 1),
-            idx::LAMP,
-            Some(idx::BLACK),
-        );
-    } else {
-        font.draw(
-            buf,
-            SCREEN_W,
-            SCREEN_H,
-            186,
-            BAR_Y + 3,
-            &format!("ДЕНЬ {}", state.day),
-            idx::WHITE,
-            Some(idx::BLACK),
-        );
-        let tp = (state.time_left / crate::day_cycle::day_len(state.day)).clamp(0.0, 1.0);
-        let bar2_y = BAR_Y + 3 + font.line_at(1);
-        rect(buf, SCREEN_W, SCREEN_H, 186, bar2_y, 50, 6, idx::SHADOW);
-        rect(
-            buf,
-            SCREEN_W,
-            SCREEN_H,
-            186,
-            bar2_y,
-            (50.0 * tp) as i32,
-            6,
-            idx::KVASS_MID,
-        );
-        frame_rect(buf, SCREEN_W, SCREEN_H, 186, bar2_y, 50, 6, idx::BLACK);
-        font.draw(
-            buf,
-            SCREEN_W,
-            SCREEN_H,
-            186,
-            bar2_y + 8,
-            &format!("КОНЕЦ {}М", (state.time_left / 60.0) as i32 + 1),
-            idx::LAMP,
-            Some(idx::BLACK),
-        );
+    // Склад (правее слотов)
+    {
+        let x = 712;
+        font.draw(c, x, BAR_Y + 16, "СКЛАД", SZ_S, col::TILE, 255);
+        icon_croutons(c, x, BAR_Y + 48);
+        put_stock(c, font, x + 44, BAR_Y + 50, inv.stock_croutons);
+        icon_sugar(c, x + 96, BAR_Y + 44);
+        put_stock(c, font, x + 128, BAR_Y + 50, inv.stock_sugar);
+
+        let vessels = [
+            (Vessel::Glass, inv.stock_glass),
+            (Vessel::Jar, inv.stock_jar),
+            (Vessel::Bottle, inv.stock_bottle),
+        ];
+        let mut ix = x + 190;
+        for (v, n) in vessels {
+            blit_icon(c, &vessel_icon(v, false), ix, BAR_Y + 44, 2);
+            put_stock(c, font, ix + 4, BAR_Y + 76, n);
+            ix += 78;
+        }
     }
 
-    // склад (справа в статусбаре): строки складываются по метрикам
-    let stock_y = BAR_Y + 2;
-    font.draw(
-        buf,
-        SCREEN_W,
-        SCREEN_H,
-        240,
-        stock_y,
-        &format!("СКЛАД {} {}", inv.stock_croutons, inv.stock_sugar),
-        idx::WHITE,
-        Some(idx::BLACK),
-    );
-    font.draw(
-        buf,
-        SCREEN_W,
-        SCREEN_H,
-        240,
-        stock_y + font.line_at(1),
-        &format!("ПОС {} {} {}", inv.stock_glass, inv.stock_jar, inv.stock_bottle),
-        idx::WHITE,
-        Some(idx::BLACK),
-    );
+    // Пауза-подсказка (правый край полки)
+    {
+        let hint = "ESC - ПАУЗА";
+        let x = CV_W - 16 - font.w(hint, SZ_S);
+        font.draw(c, x, BAR_Y + 16, hint, SZ_S, col::TILE_D, 230);
+    }
 
-    // --- Строка диалога/уведомления над статусбаром ---
-    rect(buf, SCREEN_W, SCREEN_H, 0, BAR_Y - 11, UI_W, 11, idx::SHADOW);
-    let line = if state.msg_t > 0.0 {
-        Some(state.msg.as_str())
-    } else {
-        None
-    };
-    if let Some(text) = line {
-        let text: String = text.chars().take(44).collect();
-        font.draw(buf, SCREEN_W, SCREEN_H, 3, BAR_Y - 10, &text, idx::LAMP, Some(idx::BLACK));
+    // --- Строка уведомления ---
+    if state.msg_t > 0.0 {
+        let alpha: u8 = if state.msg_t < 0.7 {
+            ((state.msg_t / 0.7) * 210.0) as u8
+        } else {
+            210
+        };
+        c.rect(0, MSG_Y, CV_W, BAR_Y - MSG_Y, [0, 0, 0], alpha);
+        font.draw_fit(c, 16, MSG_Y + 6, CV_W - 32, &state.msg, SZ_M, col::LAMP, 255);
     }
 
     // --- Подсказка: на какой предмет смотришь ---
-    // (в обучении её заменяет панель шага — не дублируем и не налегаем)
-    let fx = cam.x + cam.angle.cos() * 0.9;
-    let fy = cam.y + cam.angle.sin() * 0.9;
-    use crate::map::Tile;
-    let label: Option<&str> = if state.phase == Phase::Tutorial {
+    let label: Option<(&str, &str)> = if state.phase == Phase::Tutorial {
         None
     } else {
+        let fx = cam.x + cam.angle.cos() * 0.9;
+        let fy = cam.y + cam.angle.sin() * 0.9;
         match map.get(fx.floor() as i32, fy.floor() as i32) {
-            Tile::Croutons => Some("СУХАРИ - НАЖМИТЕ E"),
-            Tile::Sugar => Some("САХАР С ИЗЮМОМ - НАЖМИТЕ E"),
-            Tile::Water => Some("КОЛОНКА С ВОДОЙ - НАЖМИТЕ E"),
-            Tile::Shelf => Some("ПУСТАЯ ПОСУДА - НАЖМИТЕ E"),
+            Tile::Croutons => Some(("E", "СУХАРИ - ВЗЯТЬ ГОРСТЬ")),
+            Tile::Sugar => Some(("E", "САХАР С ИЗЮМОМ - ВЗЯТЬ")),
+            Tile::Water => Some(("E", "КОЛОНКА - НАБРАТЬ ВЕДРО ВОДЫ")),
+            Tile::Shelf => Some(("E", "СТЕЛЛАЖ - ВЗЯТЬ ПУСТУЮ ПОСУДУ")),
             Tile::Barrel => {
-                // бочка бродит/готова — можно подсказать ускорение
-                let k = (fx.floor() as i32, fy.floor() as i32);
-                if !qte.active && barrels.map.get(&k).map(|b| b.boostable()).unwrap_or(false) {
-                    Some("БОЧКА: ПРОБЕЛ - УСКОРИТЬ БРОЖЕНИЕ")
+                if !qte.active {
+                    Some(("E", "БОЧКА: ДЕРЖИТЕ E - РОЗЛИВ / РЕЦЕПТ"))
                 } else {
-                    Some("БОЧКА: E - РЕЦЕПТ, ДЕРЖИТЕ E - РОЗЛИВ")
+                    None
                 }
             }
-            Tile::Counter => Some("ПРИЛАВОК: E - ОТДАТЬ ПОКУПАТЕЛЮ"),
-            Tile::Doorway => Some("ДВЕРЬ НА УЛИЦУ"),
+            Tile::Counter => Some(("E", "ПРИЛАВОК - ОТДАТЬ КВАС ПОКУПАТЕЛЮ")),
+            Tile::Doorway => Some(("E", "ДВЕРЬ НА УЛИЦУ")),
             _ => None,
         }
     };
-    if let Some(text) = label {
-        let w = font.width(text) as i32 + 8;
-        let x = ((UI_W - w) / 2).max(2);
-        // пузырь речи важнее подсказки предмета
-        if !bubbles.iter().any(|b| b.hits(x, BAR_Y - 24, w, 13)) {
-            rect(buf, SCREEN_W, SCREEN_H, x, BAR_Y - 24, w, 13, idx::SHADOW);
-            frame_rect(buf, SCREEN_W, SCREEN_H, x, BAR_Y - 24, w, 13, idx::WOOD_DARK);
-            font.draw(
-                buf,
-                SCREEN_W,
-                SCREEN_H,
-                x + 4,
-                BAR_Y - 22,
-                text,
-                idx::LAMP,
-                Some(idx::BLACK),
-            );
+    if let Some((key, text)) = label {
+        let w = font.w(text, SZ_S) + 100;
+        let x = ((CV_W - w) / 2).max(8);
+        if !qte.active && !bubbles.iter().any(|b| b.hits(x, HINT_Y, w, 44)) {
+            panel(c, x, HINT_Y, w, 44);
+            let kx = keycap(c, font, x + 10, HINT_Y + 6, 32, key);
+            font.draw(c, x + kx + 16, HINT_Y + 12, text, SZ_S, col::LAMP, 255);
         }
     }
 
-    // --- Мини-игра ускорения брожения: полоска с зоной и бегунком ---
+    // --- Мини-игра ускорения брожения ---
     if qte.active {
-        draw_qte(buf, font, qte, barrels, t);
+        draw_qte(c, font, qte, barrels);
     }
 }
 
-/// Полоска ускорения брожения (снизу, над строкой уведомлений).
-///
-/// По полоске бегает бегунок, маленький участок подсвечен — туда нужно
-/// попасть ПРОБЕЛОМ: +10% к брожению. Перебор (125%/150%) портит квас.
-fn draw_qte(
-    buf: &mut [u8],
-    font: &Font,
-    qte: &BrewQte,
-    barrels: &Barrels,
-    t: f32,
-) {
-    const W: i32 = 210;
-    const X: i32 = (UI_W - W) / 2;
-    const Y: i32 = BAR_Y - 40;
-    const H: i32 = 27;
+/// Число предметов в слоте (правый нижний угол).
+fn put_count(c: &mut Canvas, font: &Font, x: i32, y: i32, n: &u8) {
+    let s = format!("{n}");
+    font.draw(c, x + 58, y + 66, &s, SZ_S, col::WHITE, 255);
+}
 
-    // панель
-    rect(buf, SCREEN_W, SCREEN_H, X, Y, W, H, idx::SHADOW);
-    frame_rect(buf, SCREEN_W, SCREEN_H, X, Y, W, H, idx::WOOD_DARK);
+/// Число на складе; ноль — красным.
+fn put_stock(c: &mut Canvas, font: &Font, x: i32, y: i32, n: u8) {
+    let s = format!("{n}");
+    let colr = if n == 0 { col::RED } else { col::WHITE };
+    font.draw(c, x, y, &s, SZ_S, colr, 255);
+}
 
-    // подпись: масштаб подбирается автоматически, чтобы не вылезало
-    let title = format!(
-        "БРОДИТ {}% — ПРОБЕЛ В ЗОНУ (+{}%)",
-        qte.barrel
-            .and_then(|k| barrels.map.get(&k))
-            .map(|b| match b.phase {
-                BarrelPhase::Ferment(p) => p as i32,
-                BarrelPhase::Ready(p) => p as i32,
-                BarrelPhase::Overripe(p) => p as i32,
-                _ => 0,
-            })
-            .unwrap_or(0),
-        crate::brewing::QTE_BONUS as i32
-    );
-    font.draw_fit(
-        buf,
-        SCREEN_W,
-        SCREEN_H,
-        X + 4,
-        Y + 3,
-        (W - 8),
-        &title,
-        idx::LAMP,
-        Some(idx::BLACK),
-        1,
-    );
+/// Полоска ускорения брожения.
+fn draw_qte(c: &mut Canvas, font: &Font, qte: &BrewQte, barrels: &Barrels) {
+    let w = 640i32;
+    let x = (CV_W - w) / 2;
+    let y = MSG_Y - 122;
+    let h = 96;
 
-    // полоска
-    const BX: i32 = X + 5;
-    const BW: i32 = W - 10;
-    const BY: i32 = Y + 15;
-    const BH: i32 = 8;
-    rect(buf, SCREEN_W, SCREEN_H, BX, BY, BW, BH, idx::METAL_DARK);
-    // подсвеченная зона
-    let z0 = BX + (BW as f32 * qte.zone0) as i32;
-    let z1 = BX + (BW as f32 * qte.zone1) as i32;
-    let zone_c = if qte.flash > 0.0 { idx::GREEN } else { idx::KVASS_LIGHT };
-    rect(buf, SCREEN_W, SCREEN_H, z0, BY, (z1 - z0).max(1), BH, zone_c);
-    // бегунок
-    let rx = BX + (BW as f32 * qte.pos) as i32;
-    rect(buf, SCREEN_W, SCREEN_H, rx - 1, BY - 1, 3, BH + 2, idx::LAMP);
-    frame_rect(buf, SCREEN_W, SCREEN_H, BX - 1, BY - 1, BW + 2, BH + 2, idx::BLACK);
+    panel(c, x, y, w, h);
+    let pct = qte
+        .barrel
+        .and_then(|k| barrels.map.get(&k))
+        .and_then(|b| match b.phase {
+            BarrelPhase::Ferment(p) | BarrelPhase::Ready(p) | BarrelPhase::Overripe(p) => Some(p),
+            _ => None,
+        })
+        .unwrap_or(0.0) as i32;
+    let title = format!("БРОДИТ {pct}% - ПРОБЕЛ В ЗОНУ (+{}%)", QTE_BONUS as i32);
+    font.draw_fit_sh(c, x + 10, y + 12, w - 20, &title, SZ_M, col::LAMP, 255);
 
-    // обратная связь по попаданию/промаху (мигает)
+    let bx = x + 24;
+    let bw = w - 48;
+    let by = y + 52;
+    let bh = 24;
+    c.rect(bx, by, bw, bh, col::METAL_D, 255);
+    c.frame(bx, by, bw, bh, col::BLACK, 255);
+    let z0 = bx + (bw as f32 * qte.zone0) as i32;
+    let zw = (((bw as f32) * (qte.zone1 - qte.zone0)) as i32).max(6);
+    let zone = if qte.flash > 0.0 { col::GREEN } else { col::KVASS_L };
+    c.rect(z0, by + 2, zw, bh - 4, zone, 255);
+    c.frame(z0, by + 2, zw, bh - 4, col::BLACK, 180);
+    let rx = bx + ((bw - 10) as f32 * qte.pos) as i32;
+    c.rect(rx, by - 4, 10, bh + 8, col::LAMP, 255);
+    c.frame(rx, by - 4, 10, bh + 8, col::BLACK, 255);
+
     if qte.flash.abs() > 0.05 {
-        let (text, col) = if qte.flash > 0.0 {
-            (format!("+{}%", crate::brewing::QTE_BONUS as i32), idx::GREEN)
+        let (text, color) = if qte.flash > 0.0 {
+            (format!("+{}%", QTE_BONUS as i32), col::GREEN)
         } else {
-            ("МИМО!".into(), idx::RED)
+            ("МИМО!".to_string(), col::RED)
         };
-        let w = font.width(&text) as i32 + 8;
-        let x = ((UI_W - w) / 2).max(2);
-        rect(buf, SCREEN_W, SCREEN_H, x, Y - 13, w, 12, idx::SHADOW);
-        frame_rect(buf, SCREEN_W, SCREEN_H, x, Y - 13, w, 12, col);
-        font.draw(buf, SCREEN_W, SCREEN_H, x + 4, Y - 11, &text, col, Some(idx::BLACK));
+        let fw = font.w(&text, SZ_L) + 24;
+        let fx = (CV_W - fw) / 2;
+        let fy = y - 46;
+        c.rect(fx, fy, fw, 40, col::SHAD, 235);
+        c.frame(fx, fy, fw, 40, color, 255);
+        font.draw_fit_sh(c, fx + 10, fy + 6, fw - 20, &text, SZ_L, color, 255);
     }
 }
 
-/// Обучение: панель инструкции сверху и мигающий маркер-стрелка на цель.
+/// Обучение: панель инструкции и мигающий маркер на цель.
 fn draw_tutorial(
-    buf: &mut [u8],
+    c: &mut Canvas,
     font: &Font,
     state: &GameState,
-    view: &CustomerView<'_>,
+    customers: &[(Vec2, Option<String>)],
     cam: &GameCam,
     t: f32,
 ) {
     let step = state.tut_step as usize;
-    let Some(ts) = crate::tutorial::TUT_STEPS.get(step) else { return };
+    let Some(ts) = crate::tutorial::TUT_STEPS.get(step) else {
+        return;
+    };
+    let ts_size = SZ_M;
+    let skip = "ПРОПУСТИТЬ";
+    let w = (font.w(ts.text, ts_size).max(font.w(skip, SZ_S) + 70) + 72).max(520);
+    let x = ((CV_W - w) / 2).max(8);
+    let y = HINT_Y - 96;
+    panel(c, x, y, w, 88);
+    font.draw(c, x + 24, y + 14, ts.text, ts_size, col::LAMP, 255);
+    let kx = keycap(c, font, x + 24, y + 52, 26, "T");
+    font.draw(c, x + kx + 34, y + 56, skip, SZ_S, col::TILE, 255);
 
-    // панель инструкции внизу (над статусбаром), внутри — пропуск
-    let skip = "T - ПРОПУСТИТЬ ОБУЧЕНИЕ";
-    let w = font
-        .width(ts.text)
-        .max(font.width(skip))
-        .max(120) as i32
-        + 12;
-    let x = ((UI_W - w) / 2).max(2);
-    rect(buf, SCREEN_W, SCREEN_H, x, BAR_Y - 50, w, 28, idx::SHADOW);
-    frame_rect(buf, SCREEN_W, SCREEN_H, x, BAR_Y - 50, w, 28, idx::LAMP);
-    font.draw(buf, SCREEN_W, SCREEN_H, x + 6, BAR_Y - 47, ts.text, idx::LAMP, Some(idx::BLACK));
-    font.draw(buf, SCREEN_W, SCREEN_H, x + 6, BAR_Y - 35, skip, idx::WHITE, Some(idx::BLACK));
-
-    // цель маркера: на последнем шаге — сама бабушка
+    // цель: на последнем шаге — сама бабушка
     let target = if step == 6 {
-        view.list.first().map(|c| (c.pos.x, c.pos.y))
+        customers.first().map(|(p, _)| (p.x, p.y))
     } else {
         Some(ts.target)
     };
-    if let Some((tx, ty)) = target {
-        // проекция (как у облачек)
-        let dir_x = cam.angle.cos();
-        let dir_y = cam.angle.sin();
-        let plane_x = -dir_y * 0.66;
-        let plane_y = dir_x * 0.66;
-        let inv_det = 1.0 / (plane_x * dir_y - dir_x * plane_y);
-        let sx = tx - cam.x;
-        let sy = ty - cam.y;
-        let px = inv_det * (dir_y * sx - dir_x * sy);
-        let py = inv_det * (-plane_y * sx + plane_x * sy);
-        if std::env::var("KVASS_DEBUG_SPRITES").is_ok() {
-            eprintln!("marker step={step} target=({tx},{ty}) px={px:.2} py={py:.2}");
-        }
-        if py > 0.3 {
-            let screen_x =
-                ((UI_W as f32 / 2.0) * (1.0 + px / py)) as i32;
-            let sprite_h = (UI_H as f32 / py * 1.2).min(160.0) as i32;
-            let feet = UI_HORIZON + (0.5 * UI_H as f32 / py) as i32;
-            let top = feet - sprite_h - 10;
-            let cx = screen_x.clamp(10, UI_W - 11);
-            let cy = top.clamp(16, BAR_Y - 56);
-            if (t * 4.0) as i32 % 2 == 0 {
-                // мигающая стрелка вниз на цель
-                for row in 0..8 {
-                    let half = 7 - row;
-                    for dx in -half..=half {
-                        put(buf, SCREEN_W, SCREEN_H, cx + dx, cy + row, idx::BLACK);
-                    }
-                }
-                for row in 1..7 {
-                    let half = 6 - row;
-                    for dx in -half..=half {
-                        put(buf, SCREEN_W, SCREEN_H, cx + dx, cy + row, idx::LAMP);
-                    }
-                }
-            }
-        } else {
-            // цель за спиной — велим повернуться (справа сверху, мимо HUD)
+    let Some((tx, ty)) = target else { return };
+
+    let dir_x = cam.angle.cos();
+    let dir_y = cam.angle.sin();
+    let plane_x = -dir_y * 0.66;
+    let plane_y = dir_x * 0.66;
+    let inv_det = 1.0 / (plane_x * dir_y - dir_x * plane_y);
+    let sx = tx - cam.x;
+    let sy = ty - cam.y;
+    let px = inv_det * (dir_y * sx - dir_x * sy);
+    let py = inv_det * (-plane_y * sx + plane_x * sy);
+    if py <= 0.3 {
+        if blink(t, 4.0) {
             let hint = "ПОВЕРНИТЕСЬ - ЦЕЛЬ ЗА СПИНОЙ!";
-            let hw = font.width(hint) as i32;
-            let hx = (UI_W - hw - 4).max(2);
-            rect(buf, SCREEN_W, SCREEN_H, hx - 4, 2, hw + 8, 13, idx::SHADOW);
-            if (t * 4.0) as i32 % 2 == 0 {
-                frame_rect(buf, SCREEN_W, SCREEN_H, hx - 4, 2, hw + 8, 13, idx::RED);
-                font.draw(buf, SCREEN_W, SCREEN_H, hx, 4, hint, idx::RED, Some(idx::BLACK));
+            let w = font.w(hint, SZ_M) + 32;
+            let x = (CV_W - w) / 2;
+            c.rect(x, 8, w, 44, col::RED_D, 255);
+            c.frame(x, 8, w, 44, col::BLACK, 255);
+            font.draw(c, x + 16, 17, hint, SZ_M, col::LAMP, 255);
+        }
+        return;
+    }
+    let screen_x = ((CV_W as f32 / 2.0) * (1.0 + px / py)) as i32;
+    let sprite_h = (((SCREEN_H as f32 / py) * 1.2 * 2.0) as i32).min(320);
+    let feet = ((HORIZON as f32 + (0.5 * SCREEN_H as f32) / py) * 2.0) as i32;
+    let top = feet - sprite_h - 24;
+    let cx = screen_x.clamp(40, CV_W - 40);
+    let cy = top.clamp(32, 440);
+    if blink(t, 4.0) {
+        for row in 0..24 {
+            let half = (21 - row) / 2;
+            for dx in -half..=half {
+                c.blend(cx + dx, cy + row, col::BLACK, 255);
+            }
+            let half2 = ((21 - row) - 2) / 2;
+            if half2 > 0 && row < 20 {
+                for dx in -half2..=half2 {
+                    c.blend(cx + dx, cy + row, col::LAMP, 255);
+                }
             }
         }
     }
 }
 
-fn blit_icon(buf: &mut [u8], icon: &[u8], x: i32, y: i32) {
-    for iy in 0..16 {
-        for ix in 0..16 {
-            let c = icon[iy * 16 + ix];
-            if c != TRANSPARENT {
-                put(buf, SCREEN_W, SCREEN_H, x + ix as i32, y + iy as i32, c);
-            }
-        }
+// =================== Экраны ===================
+
+fn draw_menu(c: &mut Canvas, font: &Font, t: f32) {
+    // уличный фон
+    c.rect(0, 0, CV_W, 240, col::SKY, 255);
+    c.rect(0, 240, CV_W, 200, col::LEAVES, 255);
+    c.rect(0, 440, CV_W, CV_H - 440, col::TILE_D, 255);
+    for yy in (460..CV_H).step_by(56) {
+        c.rect(0, yy, CV_W, 2, [70, 84, 70], 255);
     }
-}
 
-fn draw_bucket(buf: &mut [u8], x: i32, y: i32) {
-    rect(buf, SCREEN_W, SCREEN_H, x + 1, y + 3, 12, 11, idx::METAL);
-    frame_rect(buf, SCREEN_W, SCREEN_H, x + 1, y + 3, 12, 11, idx::BLACK);
-    rect(buf, SCREEN_W, SCREEN_H, x + 3, y + 1, 8, 2, idx::METAL_DARK);
-}
-
-fn draw_croutons(buf: &mut [u8], x: i32, y: i32) {
-    rect(buf, SCREEN_W, SCREEN_H, x + 2, y + 6, 10, 7, idx::WOOD_DARK);
-    frame_rect(buf, SCREEN_W, SCREEN_H, x + 2, y + 6, 10, 7, idx::BLACK);
-    put(buf, SCREEN_W, SCREEN_H, x + 4, y + 8, idx::WOOD_LIGHT);
-    put(buf, SCREEN_W, SCREEN_H, x + 8, y + 10, idx::WOOD_LIGHT);
-}
-
-fn draw_sugar(buf: &mut [u8], x: i32, y: i32) {
-    rect(buf, SCREEN_W, SCREEN_H, x + 3, y + 4, 9, 10, idx::PLASTER);
-    frame_rect(buf, SCREEN_W, SCREEN_H, x + 3, y + 4, 9, 10, idx::BLACK);
-    put(buf, SCREEN_W, SCREEN_H, x + 5, y + 7, idx::KVASS_LIGHT);
-    put(buf, SCREEN_W, SCREEN_H, x + 9, y + 9, idx::KVASS_LIGHT);
-}
-
-// --- Экраны ---
-
-fn clear(buf: &mut [u8], c: u8) {
-    buf.fill(c);
-}
-
-fn draw_menu(buf: &mut [u8], font: &Font, t: f32) {
-    clear(buf, idx::SHADOW);
-    // «улица»: небо + зелень
-    for y in 0..120i32 {
-        for x in 0..UI_W {
-            let c = if y < 70 {
-                idx::SKY
-            } else {
-                idx::LEAVES
-            };
-            put(buf, SCREEN_W, SCREEN_H, x, y, c);
-        }
-    }
-    rect(buf, SCREEN_W, SCREEN_H, 0, 120, UI_W, 80, idx::TILE_DARK);
-
-    // --- Титул: одна строка, центрируется и сама подбирает масштаб под
-    //     ширину экрана. Высота считается по метрикам шрифта, поэтому
-    //     подзаголовок встаёт ровно под титулом — наложения нет. ---
-    let mut ty = 6i32;
-    ty += font.draw_fit(
-        buf,
-        SCREEN_W,
-        SCREEN_H,
-        4,
-        ty,
-        UI_W - 8,
-        "КВАСНАЯ ЛАВКА",
-        idx::RED,
-        Some(idx::BLACK),
-        4,
-    );
-    font.draw_fit(
-        buf,
-        SCREEN_W,
-        SCREEN_H,
-        4,
-        ty,
-        UI_W - 8,
-        "VYATKA OWLS GAME JAM",
-        idx::WHITE,
-        Some(idx::BLACK),
-        1,
-    );
-
-    // киоск с красно-белой крышей-тентом
-    for r in 0..31 {
-        let y = 66 + r;
-        let half = 2 + (r * 42) / 30;
-        let c = if (r / 2) % 2 == 0 { idx::RED } else { idx::PLASTER };
-        for x in (160 - half)..=(160 + half) {
-            put(buf, SCREEN_W, SCREEN_H, x, y, c);
-        }
-        put(buf, SCREEN_W, SCREEN_H, 160 - half, y, idx::BLACK);
-        put(buf, SCREEN_W, SCREEN_H, 160 + half, y, idx::BLACK);
+    // киоск с красно-белым тентом
+    for r in 0..30 {
+        let y = 208 + r * 4;
+        let half = 110 + (r * 50) / 30;
+        let stripe = if (r / 2) % 2 == 0 { col::RED } else { col::PLASTER };
+        c.rect(640 - half - 40, y, half * 2 + 80, 4, stripe, 255);
+        c.rect(640 - half - 40, y, 4, 4, col::BLACK, 255);
+        c.rect(640 + half + 36, y, 4, 4, col::BLACK, 255);
     }
     // коробка киоска
-    rect(buf, SCREEN_W, SCREEN_H, 120, 97, 80, 45, idx::WOOD_LIGHT);
-    frame_rect(buf, SCREEN_W, SCREEN_H, 120, 97, 80, 45, idx::BLACK);
+    c.rect(480, 328, 320, 120, col::WOOD, 255);
     for i in 0..4 {
-        rect(buf, SCREEN_W, SCREEN_H, 120, 105 + i * 8, 80, 2, idx::WOOD_DARK);
+        c.rect(480, 344 + i * 24, 320, 6, col::WOOD_D, 255);
     }
+    c.frame(480, 328, 320, 120, col::BLACK, 255);
     // вывеска «КВАС»
-    rect(buf, SCREEN_W, SCREEN_H, 138, 100, 44, 11, idx::RED);
-    frame_rect(buf, SCREEN_W, SCREEN_H, 138, 100, 44, 11, idx::BLACK);
-    font.draw(buf, SCREEN_W, SCREEN_H, 144, 102, "КВАС", idx::WHITE, Some(idx::BLACK));
-    // бочка с краном на прилавке киоска
-    rect(buf, SCREEN_W, SCREEN_H, 150, 118, 20, 18, idx::WOOD_LIGHT);
-    frame_rect(buf, SCREEN_W, SCREEN_H, 150, 118, 20, 18, idx::BLACK);
-    rect(buf, SCREEN_W, SCREEN_H, 150, 123, 20, 2, idx::WOOD_DARK);
-    rect(buf, SCREEN_W, SCREEN_H, 150, 130, 20, 2, idx::WOOD_DARK);
-    rect(buf, SCREEN_W, SCREEN_H, 157, 136, 6, 5, idx::METAL);
-    // титульные подсказки: складываются по измеренной высоте строки,
-    // каждая центрируется — не наезжают и не вылезают за нижний край
-    let hints = [
-        ("ENTER - НАЧАТЬ (ОБУЧЕНИЕ)", idx::LAMP),
-        ("WASD - ХОД, E - ДЕЙСТВИЕ", idx::WHITE),
-        ("1-4 - СЛОТЫ, ESC - ПАУЗА", idx::WHITE),
+    red_plate(c, 552, 352, 176, 52);
+    font.draw_fit_sh(c, 552, 364, 176, "КВАС", SZ_L, col::WHITE, 255);
+    // бочка с краном
+    c.rect(600, 456, 88, 84, col::WOOD, 255);
+    c.rect(600, 476, 88, 6, col::WOOD_D, 255);
+    c.rect(600, 512, 88, 6, col::WOOD_D, 255);
+    c.frame(600, 456, 88, 84, col::BLACK, 255);
+    c.rect(632, 544, 24, 20, col::METAL, 255);
+    c.frame(632, 544, 24, 20, col::BLACK, 255);
+
+    // титул
+    red_plate(c, 60, 24, 1160, 130);
+    font.draw_fit_sh(c, 60, 44, 1160, "КВАСНАЯ ЛАВКА", SZ_H, col::WHITE, 255);
+    font.draw_fit_sh(c, 60, 122, 1160, "VYATKA OWLS GAME JAM", SZ_S, col::PLASTER, 240);
+
+    // подсказки с кейкапами
+    let hints: [(&str, &str); 4] = [
+        ("ENTER", "НАЧАТЬ ИГРУ"),
+        ("WASD", "ХОД, МЫШЬ - ОБЗОР"),
+        ("E", "ДЕЙСТВИЕ, 1-4 - СЛОТЫ"),
+        ("ESC", "ПАУЗА"),
     ];
-    let mut hy = 150i32;
-    for (text, c) in hints {
-        hy += font.draw_fit(buf, SCREEN_W, SCREEN_H, 4, hy, UI_W - 8, text, c, Some(idx::BLACK), 1);
+    let mut hy = 576;
+    for (k, text) in hints {
+        let kw = (font.w(k, SZ_S) + 22).max(34);
+        let row_w = kw + 24 + font.w(text, SZ_M);
+        let x0 = (CV_W - row_w) / 2;
+        let kx = keycap(c, font, x0, hy, 32, k);
+        font.draw_sh(c, x0 + kx + 24, hy + 6, text, SZ_M, col::WHITE, 255);
+        hy += 46;
     }
-    if (t * 2.0) as i32 % 2 == 0 {
-        font.draw_fit(
-            buf,
-            SCREEN_W,
-            SCREEN_H,
-            4,
-            hy,
-            UI_W - 8,
-            "INSERT COIN",
-            idx::LAMP,
-            Some(idx::BLACK),
-            1,
-        );
+    if blink(t, 2.0) {
+        let coin = "ВСТАВЬТЕ МОНЕТУ";
+        let w = font.w(coin, SZ_M);
+        font.draw_sh(c, (CV_W - w) / 2, 762, coin, SZ_M, col::LAMP, 255);
     }
 }
 
-fn draw_shopping(buf: &mut [u8], font: &Font, state: &GameState, inv: &Inventory, t: f32) {
-    clear(buf, idx::SHADOW);
-    // шапка: заголовок и строки складываются по измеренной высоте —
-    // ничего не наезжает друг на друга
-    let mut y = 6i32;
-    y += font.draw_fit(buf, SCREEN_W, SCREEN_H, 4, y, UI_W - 8, "СКЛАД", idx::KVASS_LIGHT, Some(idx::BLACK), 2);
-    y += font.draw_fit(buf, SCREEN_W, SCREEN_H, 4, y, UI_W - 8, &format!("ДЕНЬ {}", state.day), idx::WHITE, Some(idx::BLACK), 1);
-    y += font.draw_fit(buf, SCREEN_W, SCREEN_H, 4, y, UI_W - 8, &format!("КАССА {}К", state.money), idx::LAMP, Some(idx::BLACK), 1);
-    let lines = [
-        ("1 - СУХАРИ РЖАНЫЕ", "10 ГОРСТЕЙ - 20К", inv.stock_croutons),
-        ("2 - САХАР+ИЗЮМ", "10 ПОРЦИЙ - 10К", inv.stock_sugar),
-        ("3 - ПОСУДА", "4+4+4 ШТ - 15К", inv.stock_glass + inv.stock_jar + inv.stock_bottle),
-    ];
-    for (i, (a, b, n)) in lines.iter().enumerate() {
-        let y = 56 + i as i32 * 24;
-        rect(buf, SCREEN_W, SCREEN_H, 30, y - 3, 260, 24, idx::CEILING);
-        frame_rect(buf, SCREEN_W, SCREEN_H, 30, y - 3, 260, 24, idx::WOOD_DARK);
-        // пиктограмма товара слева
+fn draw_shopping(c: &mut Canvas, font: &Font, state: &GameState, inv: &Inventory, t: f32) {
+    c.rect(0, 0, CV_W, CV_H, col::PLASTER, 255);
+    // шапка
+    c.rect(0, 0, CV_W, 100, col::RED, 255);
+    c.rect(0, 100, CV_W, 4, col::RED_D, 255);
+    font.draw(c, 48, 26, "ЗАКУПКА СЫРЬЯ", SZ_T, col::WHITE, 255);
+    let day = format!("ДЕНЬ {}", state.day);
+    font.draw(c, CV_W - 48 - font.w(&day, SZ_L), 36, &day, SZ_L, col::WHITE, 240);
+
+    let money = format!("КАССА: {} К.", state.money);
+    font.draw(c, 48, 126, &money, SZ_L, col::INK, 255);
+    let norm = format!("НОРМА ДНЯ: {} К.", state.norm);
+    font.draw(c, CV_W - 48 - font.w(&norm, SZ_L), 126, &norm, SZ_L, col::INK, 240);
+
+    // три карточки товара
+    const CARD_H: i32 = 136;
+    for i in 0..3u32 {
+        let y = 192 + (i as i32) * (CARD_H + 18);
+        c.rect(48, y, CV_W - 96, CARD_H, col::WHITE, 255);
+        c.frame(48, y, CV_W - 96, CARD_H, col::BLACK, 255);
+        c.frame(52, y + 4, CV_W - 104, CARD_H - 8, col::RED, 60);
+        let (key, name, desc) = match i {
+            0 => ("1", "СУХАРИ РЖАНЫЕ", "10 ГОРСТЕЙ - 20 К."),
+            1 => ("2", "САХАР С ИЗЮМОМ", "10 ПОРЦИЙ - 10 К."),
+            _ => ("3", "ПОСУДА", "4 СТАКАНА + 4 БАНКИ + 4 БУТЫЛКИ - 15 К."),
+        };
+        // иконки
         match i {
-            0 => draw_croutons(buf, 38, y - 2),
-            1 => draw_sugar(buf, 38, y - 4),
+            0 => {
+                icon_croutons(c, 88, y + 34);
+                icon_croutons(c, 132, y + 58);
+            }
+            1 => {
+                icon_sugar(c, 96, y + 28);
+                icon_sugar(c, 138, y + 56);
+            }
             _ => {
-                blit_icon(buf, &vessel_icon(Vessel::Glass, false), 36, y - 4);
-                blit_icon(buf, &vessel_icon(Vessel::Jar, false), 54, y - 4);
-                blit_icon(buf, &vessel_icon(Vessel::Bottle, false), 72, y - 4);
+                blit_icon(c, &vessel_icon(Vessel::Glass, false), 84, y + 24, 3);
+                blit_icon(c, &vessel_icon(Vessel::Jar, false), 148, y + 24, 3);
+                blit_icon(c, &vessel_icon(Vessel::Bottle, false), 212, y + 24, 3);
             }
         }
-        let tx = if i == 2 { 94 } else { 62 };
-        font.draw(buf, SCREEN_W, SCREEN_H, tx, y, a, idx::WHITE, Some(idx::BLACK));
-        font.draw(buf, SCREEN_W, SCREEN_H, tx, y + 11, b, idx::TILE, Some(idx::BLACK));
-        font.draw(buf, SCREEN_W, SCREEN_H, 240, y + 5, &format!("ЕСТЬ {}", n), idx::LAMP, Some(idx::BLACK));
+        font.draw(c, 296, y + 20, name, SZ_L, col::INK, 255);
+        font.draw(c, 296, y + 66, desc, SZ_S, [80, 66, 52], 255);
+        let have = match i {
+            0 => format!("В ЗАПАСЕ: {}", inv.stock_croutons),
+            1 => format!("В ЗАПАСЕ: {}", inv.stock_sugar),
+            _ => format!(
+                "В ЗАПАСЕ: {}",
+                inv.stock_glass + inv.stock_jar + inv.stock_bottle
+            ),
+        };
+        font.draw(c, 296, y + 98, &have, SZ_M, col::GREEN, 255);
+        let _ = keycap(c, font, CV_W - 216, y + (CARD_H - 40) / 2, 40, key);
     }
+
+    // подсказка
     let hint = if state.day == 1 {
-        "НАЧАЛО: СУХАРИ 2, САХАР 2, ПОСУДА 4+4+1"
+        "НАЧАЛО: ЗАКУПИТЕ СУХАРИ (1), САХАР (2) И ПОСУДУ (3) - ИЛИ СРАЗУ ЖМИТЕ ENTER"
     } else {
-        "СОВЕТ: ДЕРЖИТЕ 2 БОЧКИ НА РАЗНЫХ ФАЗАХ"
+        "СОВЕТ: ДЕРЖИТЕ ДВЕ БОЧКИ НА РАЗНЫХ ФАЗАХ - КВАС ГОТОВИТСЯ НЕ СРАЗУ"
     };
-    font.draw(buf, SCREEN_W, SCREEN_H, 30, 142, hint, idx::TILE, Some(idx::BLACK));
-    if (t * 2.0) as i32 % 2 == 0 {
-        font.draw_scaled(
-            buf,
-            SCREEN_W,
-            SCREEN_H,
-            56,
-            158,
-            "ENTER - ОТКРЫТЬ ЛАВКУ",
-            idx::LAMP,
-            Some(idx::BLACK),
-            1,
-        );
+    font.draw(c, 48, CV_H - 128, hint, SZ_S, [100, 84, 66], 255);
+    if blink(t, 2.0) {
+        let go = "ENTER - ОТКРЫТЬ ЛАВКУ";
+        let gw = font.w(go, SZ_L);
+        let gx = (CV_W - gw) / 2;
+        c.rect(gx - 26, CV_H - 92, gw + 52, 58, col::SHAD, 248);
+        c.frame(gx - 26, CV_H - 92, gw + 52, 58, col::RED, 255);
+        font.draw(c, gx, CV_H - 80, go, SZ_L, col::LAMP, 255);
     }
 }
 
-fn draw_dayend(buf: &mut [u8], font: &Font, state: &GameState, t: f32) {
-    clear(buf, idx::SHADOW);
+fn draw_dayend(c: &mut Canvas, font: &Font, state: &GameState, t: f32) {
+    c.rect(0, 0, CV_W, CV_H, col::SHAD, 255);
+    let px = 190i32;
+    let pw = CV_W - 2 * px;
+    paper_panel(c, px, 72, pw, 560);
+    // красный штемпель
+    c.rect(px + 32, 106, pw - 64, 4, col::RED, 255);
+    font.draw_fit_sh(c, px + 40, 124, pw - 80, &format!("ВЕДОМОСТЬ ДНЯ {}", state.day), SZ_T, col::INK, 255);
     let ok = state.day_passed;
     let verdict = if ok { "ВЫПОЛНЕНО!" } else { "НЕ ВЫПОЛНЕНО!" };
-    let col = if ok { idx::KVASS_LIGHT } else { idx::RED };
-    // шапка складывается по метрикам — заголовок и вердикт не наезжают
-    let mut y = 16i32;
-    y += font.draw_fit(buf, SCREEN_W, SCREEN_H, 4, y, UI_W - 8, &format!("ДЕНЬ {}", state.day), idx::WHITE, Some(idx::BLACK), 2);
-    y += font.draw_fit(buf, SCREEN_W, SCREEN_H, 4, y, UI_W - 8, verdict, col, Some(idx::BLACK), 2);
-    y += 2;
+    font.draw_fit_sh(
+        c,
+        px + 40,
+        196,
+        pw - 80,
+        verdict,
+        SZ_XL,
+        if ok { col::GREEN } else { col::RED },
+        255,
+    );
+
     let rows = [
         ("ЗАРАБОТАНО ЗА ДЕНЬ", format!("{} К.", state.day_earned)),
         ("КАССА", format!("{} К.", state.money)),
         ("НОРМА ДНЯ", format!("{} К.", state.norm)),
         ("ШТРАФЫ", format!("{} К.", state.fine)),
     ];
-    let row_h = font.line_at(1);
-    for (a, b) in rows {
-        font.draw(buf, SCREEN_W, SCREEN_H, 50, y, a, idx::WHITE, Some(idx::BLACK));
-        font.draw(buf, SCREEN_W, SCREEN_H, 220, y, &b, idx::LAMP, Some(idx::BLACK));
-        y += row_h;
+    let mut y = 280i32;
+    for (label, value) in rows {
+        font.draw(c, px + 80, y, label, SZ_M, col::INK, 255);
+        // пунктирная линейка между подписью и суммой
+        let lx = px + 100 + font.w(label, SZ_M);
+        let rx = px + pw - 120 - font.w(&value, SZ_L);
+        let mut xx = lx + 16;
+        while xx < rx {
+            c.rect(xx, y + font.cap_h(SZ_M) - 6, 6, 2, col::INK, 110);
+            xx += 18;
+        }
+        font.draw(c, rx, y - 4, &value, SZ_L, col::INK, 255);
+        y += 60;
+    }
+    if state.fine > 0 {
+        let fr = format!("ПРИЧИНА: {}", state.fine_reason);
+        font.draw(c, px + 80, y + 4, &fr, SZ_S, col::RED_D, 255);
     }
     if !ok {
-        font.draw_fit(
-            buf,
-            SCREEN_W,
-            SCREEN_H,
-            4,
-            y + 2,
-            UI_W - 8,
-            "НОРМА НЕ СДАНА. ЗАВТРА ТОЧНО ПОВЕЗЁТ...",
-            idx::TILE,
-            Some(idx::BLACK),
-            1,
-        );
+        font.draw(c, px + 80, 588, "НОРМА НЕ СДАНА. ЗАВТРА ТОЧНО ПОВЕЗЁТ...", SZ_S, [110, 70, 56], 255);
     }
-    if (t * 2.0) as i32 % 2 == 0 {
-        font.draw_fit(buf, SCREEN_W, SCREEN_H, 4, 150, UI_W - 8, "ENTER - СЛЕДУЮЩИЙ ДЕНЬ", idx::LAMP, Some(idx::BLACK), 1);
+    if blink(t, 2.0) {
+        let go = if state.day >= 4 {
+            "ENTER - ФИНАЛ: СЕТЬ ОТКРЫВАЕТСЯ"
+        } else {
+            "ENTER - СЛЕДУЮЩИЙ ДЕНЬ"
+        };
+        font.draw_fit_sh(c, 0, 656, CV_W, go, SZ_XL, col::LAMP, 255);
     }
 }
 
-fn draw_final(buf: &mut [u8], font: &Font, t: f32) {
-    clear(buf, idx::RED);
-    // флаг: чёрный шест и полосатое полотнище
-    rect(buf, SCREEN_W, SCREEN_H, 0, 0, UI_W, 60, idx::RED);
-    rect(buf, SCREEN_W, SCREEN_H, 148, 8, 2, 38, idx::BLACK);
-    rect(buf, SCREEN_W, SCREEN_H, 146, 42, 6, 3, idx::BLACK);
+fn draw_final(c: &mut Canvas, font: &Font, t: f32) {
+    c.rect(0, 0, CV_W, CV_H, col::RED, 255);
+    // флаг с флагштоком
+    c.rect(744, 40, 8, 220, col::BLACK, 255);
+    c.rect(732, 256, 32, 10, col::BLACK, 255);
     for i in 0..6 {
-        let c = if i % 2 == 0 { idx::LAMP } else { idx::WHITE };
-        rect(buf, SCREEN_W, SCREEN_H, 150, 10 + i * 4, 24, 4, c);
+        let stripe = if i % 2 == 0 { col::LAMP } else { col::WHITE };
+        c.rect(752, 52 + i * 28, 220, 28, stripe, 255);
     }
-    frame_rect(buf, SCREEN_W, SCREEN_H, 150, 10, 24, 24, idx::BLACK);
-    // текст складывается по метрикам шрифта — строки идут одна под
-    // другой без наложения и одинакового кегля
-    let mut y = 66i32;
-    y += font.draw_fit(buf, SCREEN_W, SCREEN_H, 4, y, UI_W - 8, "СЕТЬ ОТКРЫТА!", idx::LAMP, Some(idx::BLACK), 3);
-    y += font.draw_fit(buf, SCREEN_W, SCREEN_H, 4, y, UI_W - 8, "ВЫ ОТКРЫЛИ СЕТЬ КВАСНЫХ ЛАВОК!", idx::WHITE, Some(idx::BLACK), 1);
-    y += font.draw_fit(buf, SCREEN_W, SCREEN_H, 4, y, UI_W - 8, "КВАС СЛАВЕН НА ВЕСЬ ГОРОД.", idx::WHITE, Some(idx::BLACK), 1);
-    y += font.draw_fit(buf, SCREEN_W, SCREEN_H, 4, y, UI_W - 8, "СПАСИБО, ХОЗЯИН!", idx::LAMP, Some(idx::BLACK), 1);
-    if (t * 2.0) as i32 % 2 == 0 {
-        font.draw_fit(buf, SCREEN_W, SCREEN_H, 4, y + 2, UI_W - 8, "ESC - В МЕНЮ", idx::WHITE, Some(idx::BLACK), 1);
+    c.frame(752, 52, 220, 168, col::BLACK, 255);
+    star(c, 862, 96, 26, col::RED, 255);
+
+    let lines = [
+        ("СЕТЬ ОТКРЫТА!", SZ_T),
+        ("ВЫ ОТКРЫЛИ СЕТЬ КВАСНЫХ ЛАВОК В ГОРОДЕ.", SZ_M),
+        ("ВАШ КВАС СЛАВЕН НА ВСЮ ОКРУГУ.", SZ_M),
+        ("СПАСИБО, ХОЗЯИН!", SZ_L),
+    ];
+    let mut y = 330i32;
+    for (text, size) in lines {
+        y += font.draw_fit_sh(c, 0, y, CV_W, text, size, col::WHITE, 255) + 12;
     }
+    if blink(t, 2.0) {
+        font.draw_fit_sh(c, 0, 712, CV_W, "ESC - В МЕНЮ", SZ_L, col::LAMP, 255);
+    }
+}
+
+/// Пятиконечная звезда с заливкой.
+fn star(c: &mut Canvas, cx: i32, cy: i32, r: i32, colr: [u8; 3], a: u8) {
+    let mut pts: Vec<(f32, f32)> = Vec::with_capacity(10);
+    for i in 0..10 {
+        let ang = -std::f32::consts::FRAC_PI_2 + i as f32 * std::f32::consts::PI / 5.0;
+        let rr = if i % 2 == 0 { r as f32 } else { r as f32 * 0.42 };
+        pts.push((cx as f32 + rr * ang.cos(), cy as f32 + rr * ang.sin()));
+    }
+    for i in 0..10 {
+        line(c, pts[i], pts[(i + 1) % 10], colr, a);
+    }
+    let n = pts.len();
+    for dy in -r..=r {
+        for dx in -r..=r {
+            let px = (cx + dx) as f32;
+            let py = (cy + dy) as f32;
+            let mut inside = false;
+            let mut k = n - 1;
+            for j in 0..n {
+                let (x1, y1) = pts[k];
+                let (x2, y2) = pts[j];
+                if (y1 > py) != (y2 > py) {
+                    let xin = (x2 - x1) * (py - y1) / (y2 - y1) + x1;
+                    if px < xin {
+                        inside = !inside;
+                    }
+                }
+                k = j;
+            }
+            if inside {
+                c.blend(cx + dx, cy + dy, colr, a);
+            }
+        }
+    }
+}
+
+fn line(c: &mut Canvas, p0: (f32, f32), p1: (f32, f32), colr: [u8; 3], a: u8) {
+    let steps = ((p1.0 - p0.0).abs() + (p1.1 - p0.1).abs()) as i32;
+    let steps = steps.max(1);
+    for i in 0..=steps {
+        let f = i as f32 / steps as f32;
+        c.blend(
+            (p0.0 + f * (p1.0 - p0.0)) as i32,
+            (p0.1 + f * (p1.1 - p0.1)) as i32,
+            colr,
+            a,
+        );
+    }
+}
+
+// =================== Меню паузы (ESC) ===================
+
+fn draw_pause(c: &mut Canvas, font: &Font, state: &GameState) {
+    let pw = 500i32;
+    let x = (CV_W - pw) / 2;
+    let y = 200;
+    let h = 400;
+    panel(c, x, y, pw, h);
+    font.draw_fit_sh(c, x, y + 24, pw, "ПЕРЕРЫВ", SZ_T, col::LAMP, 255);
+    font.draw_fit_sh(c, x + 20, y + 98, pw - 40, "ЛАВКА ЗАКРЫТА НА ОБЕД", SZ_S, col::TILE, 240);
+
+    let items = ["ПРОДОЛЖИТЬ", "В ГЛАВНОЕ МЕНЮ", "ВЫХОД ИЗ ИГРЫ"];
+    let mut iy = y + 156;
+    for (i, item) in items.iter().enumerate() {
+        let selected = i == state.pause_sel as usize;
+        if selected {
+            c.rect(x + 36, iy - 8, pw - 72, 46, col::RED_D, 255);
+            // маркер-треугольник вправо
+            for dx in 0..12 {
+                let half = dx / 2;
+                for dy in -half..=half {
+                    c.blend(x + 52 + dx, iy + 12 + dy, col::LAMP, 255);
+                }
+            }
+        }
+        font.draw(
+            c,
+            x + 78,
+            iy,
+            item,
+            SZ_L,
+            if selected { col::LAMP } else { col::WHITE },
+            255,
+        );
+        iy += 58;
+    }
+    font.draw_fit_sh(
+        c,
+        x + 20,
+        y + h - 72,
+        pw - 40,
+        "W/S - ВЫБОР   ENTER - ОК",
+        SZ_S,
+        col::TILE,
+        240,
+    );
+    font.draw_fit_sh(
+        c,
+        x + 20,
+        y + h - 40,
+        pw - 40,
+        "ESC - ПРОДОЛЖИТЬ",
+        SZ_S,
+        col::TILE,
+        240,
+    );
+}
+
+// ============ мелкие иконки (сухари/сахар) ============
+
+/// Мешок сухарей.
+fn icon_croutons(c: &mut Canvas, x: i32, y: i32) {
+    c.rect(x + 4, y - 6, 28, 10, col::WOOD, 255);
+    c.frame(x + 4, y - 6, 28, 10, col::BLACK, 255);
+    c.rect(x, y, 36, 28, col::WOOD, 255);
+    c.frame(x, y, 36, 28, col::BLACK, 255);
+    c.blend(x + 12, y + 2, col::KVASS_D, 255);
+    c.blend(x + 22, y + 8, col::KVASS_D, 255);
+    c.blend(x + 18, y + 18, col::WOOD_D, 255);
+}
+
+/// Банка сахара.
+fn icon_sugar(c: &mut Canvas, x: i32, y: i32) {
+    c.rect(x + 4, y, 16, 10, col::METAL, 255);
+    c.rect(x, y + 8, 24, 32, col::PLASTER, 255);
+    c.frame(x, y + 8, 24, 32, col::BLACK, 255);
+    c.blend(x + 8, y + 18, col::WHITE, 255);
+    c.blend(x + 16, y + 26, col::WHITE, 255);
 }

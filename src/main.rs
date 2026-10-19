@@ -3,6 +3,7 @@
 
 mod audio;
 mod brewing;
+mod canvas;
 mod customer;
 mod day_cycle;
 mod dialogues;
@@ -27,6 +28,7 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::window::{CursorGrabMode, CursorOptions, MonitorSelection, PrimaryWindow, WindowMode};
 use rand::prelude::*;
 
+use canvas::{CV_H, CV_W, Canvas};
 use brewing::Barrels;
 use customer::Customer;
 use day_cycle::{GameState, GameRng, Phase};
@@ -47,6 +49,10 @@ struct World {
 
 #[derive(Resource)]
 struct ScreenImage(Handle<Image>);
+
+/// RGBA-канвас UI (второй слой поверх мира).
+#[derive(Resource)]
+struct ScreenUi(Handle<Image>);
 
 /// Каталог assets: рядом с exe, в текущей папке или в исходниках (dev-сборка).
 pub fn assets_root() -> std::path::PathBuf {
@@ -81,9 +87,10 @@ fn fit_screen(
     if size.x < 16.0 || size.y < 16.0 {
         return;
     }
-    let Ok(mut s) = quads.single_mut() else { return };
-    if s.custom_size != Some(size) {
-        s.custom_size = Some(size);
+    for mut s in &mut quads {
+        if s.custom_size != Some(size) {
+            s.custom_size = Some(size);
+        }
     }
 }
 
@@ -115,7 +122,7 @@ fn main() {
             (
                 (
                     player::movement.run_if(in_world),
-                    player::mouse_turn,
+                    player::mouse_turn.run_if(in_world),
                     grab_cursor,
                     slot_select,
                     day_cycle::phase_system,
@@ -177,6 +184,32 @@ fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
             ..default()
         },
     ));
+
+    // Канвас UI 1280×800 (2× буфер мира) — прозрачный слой поверх мира.
+    let mut ui_image = Image::new(
+        Extent3d {
+            width: CV_W as u32,
+            height: CV_H as u32,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        vec![0u8; CV_W as usize * CV_H as usize * 4],
+        TextureFormat::Rgba8Unorm,
+        RenderAssetUsages::all(),
+    );
+    ui_image.sampler = ImageSampler::nearest();
+    let ui_handle = images.add(ui_image);
+    commands.insert_resource(ScreenUi(ui_handle.clone()));
+    commands.spawn((
+        ScreenQuad,
+        Sprite {
+            image: ui_handle,
+            custom_size: Some(Vec2::new(SCREEN_W as f32 * 3.0, SCREEN_H as f32 * 3.0)),
+            ..default()
+        },
+        Transform::from_xyz(0.0, 0.0, 1.0),
+    ));
+    commands.insert_resource(Canvas::new());
     commands.spawn(Camera2d);
 
     // Старт игрока — за прилавком, лицом к прилавку и очереди
@@ -207,8 +240,12 @@ fn grab_cursor(
     buttons: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
     mut cursors: Query<&mut CursorOptions, With<PrimaryWindow>>,
+    state: Res<GameState>,
 ) {
-    if buttons.just_pressed(MouseButton::Left) {
+    // захват курсора — только в игре/обучении (в паузе и меню мышь свободна)
+    if buttons.just_pressed(MouseButton::Left)
+        && matches!(state.phase, Phase::Playing | Phase::Tutorial)
+    {
         for mut c in &mut cursors {
             c.grab_mode = CursorGrabMode::Locked;
             c.visible = false;
@@ -249,8 +286,10 @@ fn render_frame(
     qte: Res<brewing::BrewQte>,
     customers: Query<&Customer>,
     mut world: ResMut<World>,
+    mut ui_canvas: ResMut<Canvas>,
     mut images: ResMut<Assets<Image>>,
     handle: Res<ScreenImage>,
+    ui_handle: Res<ScreenUi>,
 ) {
     // мерцание люминесцентных ламп
     let t = time.elapsed_secs();
@@ -259,6 +298,7 @@ fn render_frame(
     world.flicker = (base + drop).clamp(0.6, 1.0);
 
     // мир
+    let mut rendered = false;
     if matches!(state.phase, Phase::Playing | Phase::Tutorial) {
         let World {
             textures,
@@ -270,27 +310,40 @@ fn render_frame(
         renderer.render(&map, textures, &cam, *flicker);
         let list: Vec<_> = customers.iter().map(|c| (c.pos, c.kind)).collect();
         renderer.draw_sprites(sprites, &list, &cam, *flicker);
+        rendered = true;
     }
 
-    // HUD / экраны
-    let renders: Vec<ui::CustomerRender> = customers
-        .iter()
-        .map(|c| ui::CustomerRender {
-            kind: c.kind,
-            pos: c.pos,
-            bubble: c.bubble.clone(),
-        })
-        .collect();
-    let view = ui::CustomerView { list: &renders };
+    // канвас UI (верхний слой)
     {
-        let World {
-            renderer, font, ..
-        } = &mut *world;
-        ui::draw_frame(renderer, font, &state, &inv, &barrels, &qte, &view, t, &cam, &map);
-        renderer.present();
-        let rgba = renderer.rgba.clone();
+        let custs: Vec<(Vec2, Option<String>)> = customers
+            .iter()
+            .map(|c| (c.pos, c.bubble.clone()))
+            .collect();
+        let World { font, .. } = &*world;
+        ui_canvas.clear();
+        ui::draw_frame(
+            &mut ui_canvas,
+            font,
+            &state,
+            &inv,
+            &barrels,
+            &qte,
+            &custs,
+            t,
+            &cam,
+            &map,
+        );
+    }
+
+    // публикация кадров
+    if rendered {
+        world.renderer.present();
+        let rgba = world.renderer.rgba.clone();
         if let Some(mut img) = images.get_mut(&handle.0) {
             img.data = Some(rgba);
         }
+    }
+    if let Some(mut img) = images.get_mut(&ui_handle.0) {
+        img.data = Some(ui_canvas.px.clone());
     }
 }

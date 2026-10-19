@@ -75,7 +75,7 @@ pub fn interact(
         }
         Tile::Shelf => {
             let Some(v) = inv.take_empty_from_stock(&mut shelf_cycle) else {
-                state.notify("ПОСУДА КОНЧИЛАСЬ — КУПИТЕ (3)".into());
+                state.notify("ПОСУДА КОНЧИЛАСЬ! ЗАКУПИТЕ (3) НА СКЛАДЕ ЗАВТРА".into());
                 return;
             };
             if inv.put(HandItem::Empty(v, 1)) {

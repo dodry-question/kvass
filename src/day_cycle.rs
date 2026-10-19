@@ -27,6 +27,8 @@ pub enum Phase {
     DayEnd,
     /// Финальная заставка.
     Final,
+    /// Пауза (ESC): продолжить / в меню / выход.
+    Paused,
 }
 
 #[derive(Resource)]
@@ -48,6 +50,10 @@ pub struct GameState {
     pub tut_step: u8,
     /// Обучение пройдено/пропущено.
     pub tut_done: bool,
+    /// Откуда открыта пауза (PAUSE_FROM_*).
+    pub pause_prev: u8,
+    /// Выбранный пункт меню паузы.
+    pub pause_sel: u8,
 }
 
 impl Default for GameState {
@@ -68,6 +74,8 @@ impl Default for GameState {
             day_passed: false,
             tut_step: 0,
             tut_done: false,
+            pause_prev: PAUSE_FROM_PLAYING,
+            pause_sel: 0,
         }
     }
 }
@@ -118,6 +126,12 @@ pub fn customer_pool(day: u32) -> Vec<NpcKind> {
 }
 
 /// Фазы: меню, закупка, конец дня.
+
+/// Откуда открыли паузу (для возврата).
+pub const PAUSE_FROM_PLAYING: u8 = 0;
+pub const PAUSE_FROM_TUTORIAL: u8 = 1;
+/// Число пунктов в меню паузы.
+pub const PAUSE_ITEMS: u8 = 3;
 pub fn phase_system(
     keys: Res<ButtonInput<KeyCode>>,
     mut state: ResMut<GameState>,
@@ -129,7 +143,10 @@ pub fn phase_system(
 ) {
     match state.phase {
         Phase::Menu => {
-            if keys.just_pressed(KeyCode::Enter) || keys.just_pressed(KeyCode::Space) {
+            let go = keys.just_pressed(KeyCode::Enter)
+                || keys.just_pressed(KeyCode::NumpadEnter)
+                || keys.just_pressed(KeyCode::Space);
+            if go {
                 give_start_package(&mut state, &mut inv);
                 if state.tut_done {
                     state.phase = Phase::Shopping;
@@ -159,7 +176,10 @@ pub fn phase_system(
                 inv.stock_bottle += 4;
                 state.notify("КУПЛЕНО: ПОСУДА (4+4+4) -15 К.".into());
             }
-            if keys.just_pressed(KeyCode::Enter) {
+            let go = keys.just_pressed(KeyCode::Enter)
+                || keys.just_pressed(KeyCode::NumpadEnter)
+                || keys.just_pressed(KeyCode::Space);
+            if go {
                 state.phase = Phase::Playing;
                 state.time_left = day_len(state.day);
                 state.spawn_t = 10.0;
@@ -178,7 +198,10 @@ pub fn phase_system(
             }
         }
         Phase::DayEnd => {
-            if keys.just_pressed(KeyCode::Enter) {
+            let go = keys.just_pressed(KeyCode::Enter)
+                || keys.just_pressed(KeyCode::NumpadEnter)
+                || keys.just_pressed(KeyCode::Space);
+            if go {
                 if state.day >= 4 {
                     state.phase = Phase::Final;
                     return;
@@ -202,8 +225,67 @@ pub fn phase_system(
                 state.phase = Phase::Menu;
             }
         }
-        Phase::Tutorial | Phase::Playing => {}
+        Phase::Playing => {
+            if keys.just_pressed(KeyCode::Escape) {
+                state.pause_prev = PAUSE_FROM_PLAYING;
+                state.pause_sel = 0;
+                state.phase = Phase::Paused;
+            }
+        }
+        Phase::Tutorial => {
+            if keys.just_pressed(KeyCode::Escape) {
+                state.pause_prev = PAUSE_FROM_TUTORIAL;
+                state.pause_sel = 0;
+                state.phase = Phase::Paused;
+            }
+        }
+        Phase::Paused => {
+            let n = PAUSE_ITEMS.max(1);
+            if keys.just_pressed(KeyCode::ArrowUp) || keys.just_pressed(KeyCode::KeyW) {
+                state.pause_sel = (state.pause_sel + n - 1) % n;
+            }
+            if keys.just_pressed(KeyCode::ArrowDown) || keys.just_pressed(KeyCode::KeyS) {
+                state.pause_sel = (state.pause_sel + 1) % n;
+            }
+            let ok = keys.just_pressed(KeyCode::Enter)
+                || keys.just_pressed(KeyCode::NumpadEnter)
+                || keys.just_pressed(KeyCode::Space)
+                || keys.just_pressed(KeyCode::KeyE);
+            if keys.just_pressed(KeyCode::Escape) {
+                // ESC = продолжить
+                ok_pause_resume(&mut state);
+            } else if ok {
+                match state.pause_sel.min(n - 1) {
+                    0 => ok_pause_resume(&mut state),
+                    1 => {
+                        // в главное меню: сброс мира
+                        for b in barrels.map.values_mut() {
+                            *b = crate::brewing::Barrel::new();
+                        }
+                        for e in customers.iter() {
+                            commands.entity(e).despawn();
+                        }
+                        dirty.0 = 0;
+                        state.msg_t = 0.0;
+                        state.phase = Phase::Menu;
+                    }
+                    _ => {
+                        // выход из игры
+                        std::process::exit(0);
+                    }
+                }
+            }
+        }
     }
+}
+
+/// Возврат из паузы к игре/обучению.
+fn ok_pause_resume(state: &mut GameState) {
+    state.phase = if state.pause_prev == PAUSE_FROM_TUTORIAL {
+        Phase::Tutorial
+    } else {
+        Phase::Playing
+    };
 }
 
 /// Идёт игровой день: таймер, спавн, конец смены.

@@ -1,11 +1,93 @@
-//! Текст в палитровом буфере 320x200.
-//! Основной шрифт — пиксельный TTF (assets/fonts/vt323.ttf), растеризуется
-//! fontdue в бинарные маски при старте. Если TTF нет — запасной встроенный
-//! растровый шрифт 5x6 (только заглавные).
+//! Текст на RGBA-канвасе UI.
+//!
+//! Шрифт — обычный кириллический TTF (assets/fonts/golos.ttf), растеризуется
+//! fontdue в полутоновые маски (антиалиасинг). Кегли — фиксированный набор
+//! SIZES, поэтому ширину/высоту строк можно измерять, а вёрстку панелей
+//! вести по метрикам — строки не наезжают друг на друга.
+//! Метрики fontdue: ymin — низ растра над базовой линией (может быть < 0),
+//! верхняя строка растра — на ymin+h-1 выше базовой линии.
+//! Если TTF нет — запасной встроенный растровый шрифт 5×6 (только заглавные).
 
 use std::collections::HashMap;
 
-use crate::raycaster::UI_SCALE;
+use crate::canvas::Canvas;
+
+/// Набор кеглей (пиксели канваса 1280×800).
+pub const SIZES: [usize; 6] = [20, 24, 30, 38, 48, 64];
+pub const SZ_S: usize = 20;
+pub const SZ_M: usize = 24;
+pub const SZ_L: usize = 30;
+pub const SZ_XL: usize = 38;
+pub const SZ_T: usize = 48;
+pub const SZ_H: usize = 64;
+
+/// Ближайший кегль не больше запрошенного.
+pub fn pick(px: usize) -> usize {
+    let mut best = SIZES[0];
+    for &s in SIZES.iter() {
+        if s <= px {
+            best = s;
+        }
+    }
+    best
+}
+
+/// Самый близкий кегль.
+fn pick_nearest(px: usize) -> usize {
+    let mut best = SIZES[0];
+    let mut bd = usize::MAX;
+    for &s in SIZES.iter() {
+        let d = s.abs_diff(px);
+        if d < bd {
+            bd = d;
+            best = s;
+        }
+    }
+    best
+}
+
+fn norm_char(c: char) -> char {
+    match c {
+        '—' | '–' | '−' => '-',
+        '…' => '.',
+        _ => c,
+    }
+}
+
+/// Есть ли глиф в растровой карте (непустой).
+fn raster_missing(r: &HashMap<char, Glyph>, c: char) -> bool {
+    r.get(&c).map_or(true, |g| g.w == 0)
+}
+
+/// Полутоновая маска глифа TTF (антиалиасинг).
+#[derive(Clone)]
+struct Glyph {
+    /// Шаг каретки.
+    adv: i32,
+    /// Смещение чернил от каретки по X.
+    xmin: i32,
+    /// Низ растра над базовой линией (может быть отрицательным).
+    ymin: i32,
+    w: usize,
+    h: usize,
+    /// Покрытие 0..255, строки сверху вниз.
+    cov: Vec<u8>,
+}
+
+/// Метрики кегля: (капс, выносные, высота строки, воздух сверху).
+type SizeMetrics = (i32, i32, i32, i32);
+
+pub struct Font {
+    fallback: HashMap<char, [u8; GLYPH_H]>,
+    /// Кегль -> глифы.
+    sizes: HashMap<usize, HashMap<char, Glyph>>,
+    /// Кегль -> метрики.
+    metrics: HashMap<usize, SizeMetrics>,
+    /// Есть ли настоящий TTF (иначе запасной 5×6).
+    ttf: bool,
+    /// Отладочный кегль (печатается в selftest).
+    pub px_label: String,
+}
 
 pub const GLYPH_W: usize = 5;
 pub const GLYPH_H: usize = 6;
@@ -104,148 +186,17 @@ pub const GLYPHS: &[(char, [&str; 6])] = &[
     (' ', [".....", ".....", ".....", ".....", ".....", "...."]),
 ];
 
-/// Есть ли глиф в растровой карте (непустой).
-fn raster_missing(r: &HashMap<char, GlyphRaster>, c: char) -> bool {
-    r.get(&c).map_or(true, |g| g.w == 0)
-}
-
-/// Растеризованный глиф TTF: бинарная маска + шаг.
-struct GlyphRaster {
-    adv: i32,
-    w: usize,
-    h: usize,
-    /// Смещение первой строки маски от строки базовой линии
-    /// (вверх от базовой линии — отрицательное). Общая для всех
-    /// глифов сетка — буквы одного кегля не «прыгают» по высоте.
-    top: i32,
-    /// Левый отступ чернил от позиции каретки.
-    xmin: i32,
-    mask: Vec<u8>,
-}
-
-/// Маска глифа на сетке, привязанной к базовой линии: строка j покрывает
-/// высотомерные пиксели [j*SS, (j+1)*SS) относительно базовой линии
-/// (div_euclid, т.е. строки над линией — отрицательные). Раньше маска
-/// строилась как div_ceil(h_hi, SS) без привязки — каждый глиф садился
-/// на сетку со случайным сдвигом до 1px, из-за чего «О» была выше «Н»,
-/// а тонкие штрихи «Н» рвались. Возвращает (jmin, w, h, mask).
-fn glyph_mask(
-    m: &fontdue::Metrics,
-    bitmap: &[u8],
-    th: u8,
-) -> Option<(i32, usize, usize, Vec<u8>)> {
-    if m.width == 0 || m.height == 0 {
-        return None;
-    }
-    let ss = TTF_SS as i32;
-    let w_hi = m.width as i32;
-    let h_hi = m.height as i32;
-    let y0 = m.ymin;
-    let jmin = y0.div_euclid(ss);
-    let jmax = (y0 + h_hi - 1).div_euclid(ss);
-    let h = (jmax - jmin + 1) as usize;
-    let w = (m.width as usize).div_ceil(TTF_SS);
-    let mut mask = vec![0u8; w * h];
-    for j in 0..h {
-        for i in 0..w {
-            let mut sum = 0u32;
-            let mut n = 0u32;
-            let r0 = (jmin + j as i32) * ss;
-            for r in r0..r0 + ss {
-                if r < y0 || r >= y0 + h_hi {
-                    continue;
-                }
-                let br = (r - y0) as usize;
-                for c in (i as i32 * ss)..((i as i32 + 1) * ss).min(w_hi) {
-                    sum += bitmap[br * w_hi as usize + c as usize] as u32;
-                    n += 1;
-                }
-            }
-            if n > 0 && sum / n >= th as u32 {
-                mask[j * w + i] = 1;
-            }
-        }
-    }
-    // Одиночные точки-шум от сглаживания убираем только когда растр
-    // строился через суперсэмплинг (TTF_SS > 1). При чистой родной
-    // сетке шрифта одиночный пиксель — не шум, а настоящая точка
-    // диакритики («Ё», «й»), трогать её нельзя.
-    let mut clean = mask.clone();
-    if TTF_SS > 1 {
-        for j in 0..h {
-            for i in 0..w {
-                if mask[j * w + i] == 0 {
-                    continue;
-                }
-                let mut nb = 0;
-                for dj in -1i32..=1 {
-                    for di in -1i32..=1 {
-                        if dj == 0 && di == 0 {
-                            continue;
-                        }
-                        let (jj, ii) = (j as i32 + dj, i as i32 + di);
-                        if jj >= 0
-                            && jj < h as i32
-                            && ii >= 0
-                            && ii < w as i32
-                            && mask[jj as usize * w + ii as usize] == 1
-                        {
-                            nb += 1;
-                        }
-                    }
-                }
-                if nb == 0 {
-                    clean[j * w + i] = 0;
-                }
-            }
-        }
-    }
-    Some((jmin, w, h, clean))
-}
-
-/// Размер растеризации TTF (пиксели).
-///
-/// Важно: pixelify.ttf нарисован автором на сетке 10px. Растеризация
-/// строго в кратном размере (10, 20, 30...) даёт 100% чистую двоичную
-/// сетку — буквы ровно такие, как их задумал шрифтовой художник.
-/// Промежуточные размеры (12, 24...) дают ~78% сглаживания, а порог
-/// потом режет штрихи рвано — именно это и было видно как «рваные»
-/// буквы. 20px = 2× родной сетки: капслок ~7px в дизайновых координатах
-/// (320×200), т.е. прежний кегль, но без мыла.
-const TTF_PX: f32 = 20.0;
-/// Суперсэмплинг выключен (1): шрифт уже пиксельный, усреднение только
-/// ломает его сетку. Маска строится в TTF_PX и бинаризуется порогом.
-const TTF_SS: usize = 1;
-/// Порог сглаживания -> чёрный пиксель. При чистой родной сетке работает
-/// как «не белое — значит чернило», остатки сглаживания убирает чистка
-/// одиночных пикселей в glyph_mask.
-const TTF_THRESHOLD: u8 = 96;
-
-/// Размер растеризации: можно переопределить KVASS_FONT_PX (для подбора).
-fn ttf_px() -> f32 {
-    std::env::var("KVASS_FONT_PX")
+/// Кегли можно переопределить переменной окружения (для отладки).
+fn fontsize_env() -> Option<Vec<usize>> {
+    std::env::var("KVASS_FONT_SIZES")
         .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(TTF_PX)
-}
-
-/// Порог бинаризации: KVASS_FONT_THRESHOLD.
-fn ttf_threshold() -> u8 {
-    std::env::var("KVASS_FONT_THRESHOLD")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(TTF_THRESHOLD)
-}
-
-pub struct Font {
-    fallback: HashMap<char, [u8; GLYPH_H]>,
-    raster: HashMap<char, GlyphRaster>,
-    /// Высота прописных в строках маски (кегль). Общая для всех букв —
-    /// «О» и «Н» одного размера.
-    cap_h: i32,
-    /// На сколько строк выносные элементы (у, р, д, ц, щ, ф) уходят
-    /// ниже базовой линии. Нужно, чтобы строки не наезжали друг на друга.
-    descent: i32,
+        .map(|s| {
+            s.split(',')
+                .filter_map(|p| p.trim().parse::<usize>().ok())
+                .filter(|&p| (8..=200).contains(&p))
+                .collect::<Vec<usize>>()
+        })
+        .filter(|v: &Vec<usize>| !v.is_empty())
 }
 
 impl Font {
@@ -265,14 +216,18 @@ impl Font {
             fallback.insert(*ch, bits);
         }
 
-        let mut raster = HashMap::new();
-        // метрики кегля (заполняются при успешной загрузке TTF)
-        let mut out_cap_h = (GLYPH_H - 1) as i32;
-        let mut out_descent = 0i32;
-        let px = ttf_px();
-        let th = ttf_threshold();
+        let want = fontsize_env().unwrap_or_else(|| SIZES.to_vec());
         let root = crate::assets_root();
-        let candidates = [root.join("fonts").join("vt323.ttf"), root.join("fonts").join("pixelify.ttf")];
+        let candidates = [
+            root.join("fonts").join("golos.ttf"),
+            root.join("fonts").join("pixelify.ttf"),
+            root.join("fonts").join("vt323.ttf"),
+        ];
+        let mut sizes: HashMap<usize, HashMap<char, Glyph>> = HashMap::new();
+        let mut metrics: HashMap<usize, SizeMetrics> = HashMap::new();
+        let mut ttf = false;
+        let mut px_label = String::from("5x6");
+
         'load: for path in candidates {
             let Ok(bytes) = std::fs::read(&path) else { continue };
             let Ok(fnt) = fontdue::Font::from_bytes(bytes, fontdue::FontSettings::default()) else {
@@ -280,389 +235,343 @@ impl Font {
             };
             // кириллица обязательна — проба
             let probe = ['А', 'Б', 'К', 'м', 'ь'];
+            let probe_px = *want.iter().max().unwrap_or(&30) as f32;
             let have = probe
                 .iter()
-                .filter(|&&c| fnt.rasterize(c, px).0.width > 0)
+                .filter(|&&c| fnt.rasterize(c, probe_px).0.width > 0)
                 .count();
             eprintln!("font: {} — кириллица {have}/{}", path.display(), probe.len());
             if have < probe.len() {
                 continue;
             }
-            let mut chars: Vec<char> = (' '..='~').collect();
-            chars.extend('А'..='Я');
-            chars.extend('а'..='я');
-            chars.extend(['Ё', 'ё', '№', '—', '«', '»', '…']);
-            let ss = TTF_SS as i32;
-            let px_hi = px * TTF_SS as f32;
-            // базовая линия — по строке, на которой стоит «Н»
-            let (nm, _) = fnt.rasterize('Н', px_hi);
-            let cap_top = nm.ymin.div_euclid(ss);
-            let cap_h = ((nm.ymin + nm.height as i32 - 1).div_euclid(ss) - cap_top + 1).max(1);
-            let base_row = cap_top + cap_h - 1;
-            let mut descent = 0i32;
-            for c in chars.clone() {
-                let (m, bitmap) = fnt.rasterize(c, px_hi);
-                if c == ' ' || m.width == 0 || m.height == 0 {
-                    // пустой глиф (пробел) — только шаг
-                    let adv = ((m.advance_width / TTF_SS as f32).round() as i32).max(1);
-                    raster.insert(
+
+            let chars: Vec<char> = {
+                let mut v: Vec<char> = (' '..='~').collect();
+                v.extend('А'..='Я');
+                v.extend('а'..='я');
+                v.extend(['Ё', 'ё', '№', '—', '–', '−', '«', '»', '…']);
+                v
+            };
+
+            for &px in &want {
+                let mut map: HashMap<char, Glyph> = HashMap::new();
+                // капс — верх «Н» над базовой линией
+                let (nm, _) = fnt.rasterize('Н', px as f32);
+                let cap = nm.ymin + nm.height as i32;
+                let mut desc = 0i32;
+                for c in chars.clone() {
+                    let (m, bmp) = fnt.rasterize(c, px as f32);
+                    let adv = (m.advance_width.round() as i32).max(1);
+                    if c == ' ' || m.width == 0 || m.height == 0 {
+                        map.insert(
+                            c,
+                            Glyph {
+                                adv,
+                                xmin: 0,
+                                ymin: 0,
+                                w: 0,
+                                h: 0,
+                                cov: Vec::new(),
+                            },
+                        );
+                        continue;
+                    }
+                    desc = desc.max(-(m.ymin));
+                    let mut cov = vec![0u8; bmp.len()];
+                    for (o, v) in cov.iter_mut().zip(bmp.iter()) {
+                        // слабый шлейф сглаживания в ноль — фон остаётся чистым
+                        *o = if *v < 26 { 0 } else { *v };
+                    }
+                    map.insert(
                         c,
-                        GlyphRaster {
+                        Glyph {
                             adv,
-                            w: 0,
-                            h: 0,
-                            top: 0,
-                            xmin: 0,
-                            mask: Vec::new(),
+                            xmin: m.xmin,
+                            ymin: m.ymin,
+                            w: m.width as usize,
+                            h: m.height as usize,
+                            cov,
                         },
                     );
-                    continue;
                 }
-                // маска на общей сетке базовой линии — буквы одного кегля
-                // не «прыгают» по высоте (раньше «О» выходила выше «Н»)
-                let Some((jmin, w, h, mask)) = glyph_mask(&m, &bitmap, th) else {
-                    continue;
-                };
-                // Подрезаем «округлую» вылетку до общего бокса прописных.
-                // В TTF круглые буквы (О, С, ...) на 1px выше/ниже линий —
-                // в пиксельном кегле это читается как «буквы разного
-                // размера». Диакритику (Ё, Й) не трогаем: над прописной
-                // у неё пустая строка-разрыв, т.е. нет «прирастания».
-                let mut jmin = jmin;
-                let mut h = h as i32;
-                let mut mask = mask;
-                let mut trimmed = 0i32;
-                while trimmed < 2 && jmin < cap_top && h > cap_h && w >= 2 {
-                    let top_ok = mask[0] == 1 && mask[w] == 1;
-                    if !top_ok {
-                        break;
-                    }
-                    mask.drain(0..w);
-                    jmin += 1;
-                    h -= 1;
-                    trimmed += 1;
-                }
-                while trimmed < 2 && jmin + h - 1 > base_row && h > cap_h && w >= 2 {
-                    let last = (h - 1) as usize * w;
-                    let prev = (h - 2) as usize * w;
-                    let bot_ok = mask[last] == 1 && mask[prev] == 1;
-                    if !bot_ok {
-                        break;
-                    }
-                    mask.truncate(last);
-                    h -= 1;
-                    trimmed += 1;
-                }
-                descent = descent.max(jmin + h - 1 - base_row);
-                // шаг глифа не меньше реальных чернил — буквы не наезжают
-                let adv_hi = (m.advance_width.round() as i32).max(1);
-                let adv = ((adv_hi as f32 / TTF_SS as f32).round() as i32)
-                    .max(1)
-                    .max(w as i32);
-                raster.insert(
-                    c,
-                    GlyphRaster {
-                        adv,
-                        w,
-                        h: h as usize,
-                        top: jmin - cap_top,
-                        xmin: m.xmin.div_euclid(ss),
-                        mask,
-                    },
-                );
+                let cap = cap.max(1);
+                let desc = desc.max(0);
+                let pad = (px as i32 / 7).max(3);
+                let line = cap + desc + pad;
+                // половина свободного места — над прописными, половина — под строкой
+                let top_pad = ((line - cap - desc) / 2).max(0);
+                sizes.insert(px, map);
+                metrics.insert(px, (cap, desc, line, top_pad));
             }
-            out_cap_h = cap_h;
-            out_descent = descent.max(0);
-            // диагностика: какие символы шрифт не содержит
-            let missing: Vec<char> = chars
-                .iter()
-                .copied()
-                .filter(|&c| c != ' ')
-                .filter(|&c| raster_missing(&raster, c))
-                .collect();
-            if !missing.is_empty() {
-                eprintln!(
-                    "font: {} — нет глифов ({}): {:?}",
-                    path.display(),
-                    missing.len(),
-                    missing
-                );
+            if let Some(m0) = sizes.get(&want[0]) {
+                let missing: Vec<char> = chars
+                    .iter()
+                    .copied()
+                    .filter(|&c| c != ' ')
+                    .filter(|&c| raster_missing(m0, c))
+                    .collect();
+                if !missing.is_empty() {
+                    eprintln!(
+                        "font: {} — нет глифов ({}): {:?}",
+                        path.display(),
+                        missing.len(),
+                        missing
+                    );
+                }
             }
+            ttf = true;
+            px_label = format!("{} px", want.iter().min().unwrap_or(&20));
             break 'load;
+        }
+
+        if !ttf {
+            eprintln!("font: TTF не найдены — встроенный шрифт 5×6");
+            for &px in &want {
+                let sc = (px / 6).max(1) as i32;
+                let cap = 5 * sc;
+                let desc = sc;
+                let line = cap + desc + 2;
+                metrics.insert(px, (cap, desc, line, 0));
+                sizes.insert(px, HashMap::new());
+            }
+            px_label = "5x6".into();
         }
 
         Self {
             fallback,
-            raster,
-            cap_h: out_cap_h,
-            descent: out_descent,
+            sizes,
+            metrics,
+            ttf,
+            px_label,
         }
     }
 
-    /// Высота прописных (кегль) в строках маски — базовая единица.
-    pub fn cap_rows(&self) -> i32 {
-        self.cap_h.max(1)
+    fn metrics_of(&self, size: usize) -> SizeMetrics {
+        let s = pick_nearest(size);
+        *self
+            .metrics
+            .get(&s)
+            .unwrap_or(&(s as i32, 0, s as i32 + 6, 0))
     }
 
-    /// Полная высота строки текста при заданном целочисленном масштабе,
-    /// в дизайновых пикселях: кегль + выносные + воздух под тень.
-    /// Ровно столько, сколько нужно строке — ничего не наезжает.
-    pub fn line_at(&self, scale: usize) -> i32 {
-        let s = scale.max(1) as i32;
-        ((self.cap_h + self.descent) * s + s + UI_SCALE - 1) / UI_SCALE
+    /// Высота строки (пиксели канваса).
+    pub fn line(&self, size: usize) -> i32 {
+        self.metrics_of(size).2
     }
 
-    /// Ширина текста при заданном масштабе, в дизайновых пикселях.
-    pub fn width_at(&self, text: &str, scale: usize) -> i32 {
-        let s = scale.max(1) as i32;
-        if !self.raster.is_empty() {
-            (text.chars().map(|c| self.advance(c).max(0)).sum::<i32>().max(0) * s
-                + UI_SCALE
-                - 1)
-                / UI_SCALE
-        } else {
-            ((text.chars().count() * (GLYPH_W + 1)) as i32 * s + UI_SCALE - 1) / UI_SCALE
+    /// Высота прописных (для вертикального центрирования).
+    pub fn cap_h(&self, size: usize) -> i32 {
+        self.metrics_of(size).0
+    }
+
+    /// Ширина текста (пиксели канваса). Нет глифа — ширина «?».
+    pub fn w(&self, text: &str, size: usize) -> i32 {
+        let t: String = text.chars().map(norm_char).collect();
+        if !self.ttf {
+            let sc = (pick_nearest(size) as i32 / 6).max(1);
+            return t.chars().count() as i32 * ((GLYPH_W + 1) as i32 * sc);
         }
-    }
-
-    /// Подбирает наибольший масштаб (от 1 до max_scale), при котором текст
-    /// влезает в max_w (дизайновых px). Если и с масштабом 1 не влезает —
-    /// возвращает 1 (вызывающий сам переносит или обрезает осознанно).
-    pub fn fit_scale(&self, text: &str, max_w: i32, max_scale: usize) -> usize {
-        for s in (1..=max_scale.max(1)).rev() {
-            if self.width_at(text, s) <= max_w {
-                return s;
+        let s = pick_nearest(size);
+        let map = match self.sizes.get(&s) {
+            Some(m) if !m.is_empty() => m,
+            _ => return t.chars().count() as i32 * s as i32,
+        };
+        let mut w = 0i32;
+        for c in t.chars() {
+            match map.get(&c) {
+                Some(g) => w += g.adv.max(0),
+                None => w += (GLYPH_W + 1) as i32 * (s as i32 / 6).max(1),
             }
         }
-        1
+        w
     }
 
-    /// Рисует текст в прямоугольнике [x, x+w): подбирает масштаб под ширину
-    /// и центрирует. Не выходит за рамки и не режется. Возвращает высоту
-    /// строки в дизайновых px — чтобы вызывающий мог_STACKовать строки.
-    pub fn draw_fit(
+    /// Наибольший кегль из SIZES при котором текст влезает в max_w.
+    pub fn fit(&self, text: &str, max_w: i32, max_size: usize) -> usize {
+        let mut best = SIZES[0];
+        for &s in SIZES.iter() {
+            if s <= max_size && self.w(text, s) <= max_w {
+                best = s;
+            }
+        }
+        best
+    }
+
+    /// Рисует строку; `x`,`y` — верх строки.
+    pub fn draw(
         &self,
-        buf: &mut [u8],
-        bw: usize,
-        bh: usize,
+        canvas: &mut Canvas,
+        x: i32,
+        y: i32,
+        text: &str,
+        size: usize,
+        col: [u8; 3],
+        a: u8,
+    ) {
+        let s = pick_nearest(size);
+        let t: String = text.chars().map(norm_char).collect();
+        let (cap, _desc, _line, top_pad) = self.metrics_of(size);
+        let baseline = y + top_pad + cap;
+        let fallback_scale = (s as i32 / 6).max(1);
+        if !self.ttf {
+            // встроенный запасной 5×6
+            let mut cx = x;
+            for c in t.chars() {
+                self.blit_fallback(canvas, &mut cx, baseline, size, &c, col, a);
+            }
+            return;
+        }
+        let map = match self.sizes.get(&s) {
+            Some(m) if !m.is_empty() => m,
+            _ => {
+                let mut cx = x;
+                for c in t.chars() {
+                    self.blit_fallback(canvas, &mut cx, baseline, size, &c, col, a);
+                }
+                return;
+            }
+        };
+        let mut cx = x;
+        for c in t.chars() {
+            match map.get(&c) {
+                Some(g) if g.w > 0 && g.h > 0 => {
+                    let gx = cx + g.xmin;
+                    // верхняя строка растра: ymin+h-1 пикселей над базовой линией
+                    let gy = baseline + 1 - g.ymin - g.h as i32;
+                    self.blit_glyph(canvas, gx, gy, g, col, a);
+                    cx += g.adv.max(0);
+                }
+                // пустой глиф (пробел и т.п.) — только шаг каретки
+                Some(g) => cx += g.adv.max(0),
+                None => {
+                    self.blit_fallback(canvas, &mut cx, baseline, size, &c, col, a);
+                }
+            }
+        }
+    }
+
+    /// Строка с мягкой тенью (+2 px вниз) — читаемость на любом фоне.
+    pub fn draw_sh(
+        &self,
+        canvas: &mut Canvas,
+        x: i32,
+        y: i32,
+        text: &str,
+        size: usize,
+        col: [u8; 3],
+        a: u8,
+    ) {
+        self.draw(
+            canvas,
+            x,
+            y + 2,
+            text,
+            size,
+            [0, 0, 0],
+            ((a as u32 * 3) / 4).min(255) as u8,
+        );
+        self.draw(canvas, x, y, text, size, col, a);
+    }
+
+    /// Вписывает и центрирует текст в прямоугольнике. Возвращает высоту строки.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_fit_sh(
+        &self,
+        canvas: &mut Canvas,
         x: i32,
         y: i32,
         w: i32,
         text: &str,
-        color: u8,
-        outline: Option<u8>,
-        max_scale: usize,
+        max_size: usize,
+        col: [u8; 3],
+        a: u8,
     ) -> i32 {
-        let s = self.fit_scale(text, w, max_scale);
-        let tw = self.width_at(text, s);
-        let tx = x + ((w - tw) / 2).max(0);
-        self.draw_scaled(buf, bw, bh, tx, y, text, color, outline, s);
-        self.line_at(s)
-    }
-
-    fn glyph(&self, ch: char) -> Option<&[u8; GLYPH_H]> {
-        let ch = match ch {
-            '—' | '–' | '−' => '-',
-            '…' => '.',
-            _ => ch,
-        };
-        if self.raster.is_empty() {
-            let up: char = ch.to_uppercase().next().unwrap_or(ch);
-            return self.fallback.get(&up).or_else(|| self.fallback.get(&'?'));
-        }
-        self.fallback.get(&ch).or_else(|| self.fallback.get(&'?'))
-    }
-
-    fn advance(&self, ch: char) -> i32 {
-        if let Some(g) = self.raster.get(&ch) {
-            g.adv
+        let s0 = pick(max_size);
+        let s = if self.w(text, s0) <= w {
+            s0
         } else {
-            (GLYPH_W + 1) as i32
-        }
+            self.fit(text, w, s0)
+        };
+        let tx = x + ((w - self.w(text, s)) / 2).max(0);
+        self.draw_sh(canvas, tx, y, text, s, col, a);
+        self.line(s)
     }
 
-    /// Ширина текста в дизайновых пикселях при масштабе 1.
-    pub fn width(&self, text: &str) -> usize {
-        self.width_at(text, 1).max(0) as usize
-    }
-
-    /// Рисует текст с обрезкой по краям. `outline` — цвет тени (+1/+1).
-    pub fn draw(
-        &self,
-        buf: &mut [u8],
-        bw: usize,
-        bh: usize,
-        x: i32,
-        y: i32,
-        text: &str,
-        color: u8,
-        outline: Option<u8>,
-    ) {
-        self.draw_scaled(buf, bw, bh, x, y, text, color, outline, 1);
-    }
-
-    /// То же с целочисленным масштабом. `x`, `y` — дизайновые координаты
-    /// (пространство 320×200); реальные = ×UI_SCALE. Растр TTF уже в
-    /// реальных px (24px), поэтому рисуется 1:1 при scale=1.
-    pub fn draw_scaled(
-        &self,
-        buf: &mut [u8],
-        bw: usize,
-        bh: usize,
-        x: i32,
-        y: i32,
-        text: &str,
-        color: u8,
-        outline: Option<u8>,
-        scale: usize,
-    ) {
-        let s = scale as i32;
-        let base = s * UI_SCALE; // масштаб запасного 5×6 шрифта (дизайновый)
-        let mut cx = x * UI_SCALE;
-        let ry = y * UI_SCALE;
-        for ch in text.chars() {
-            if !self.raster.is_empty() {
-                if let Some(g) = self.raster.get(&ch) {
-                    if g.w > 0 {
-                        let gy = ry + g.top * s;
-                        let gx = cx + g.xmin * s;
-                        if let Some(o) = outline {
-                            let off = s * UI_SCALE;
-                            self.blit_mask(buf, bw, bh, gx + off, gy + off, g, s, o);
-                        }
-                        self.blit_mask(buf, bw, bh, gx, gy, g, s, color);
-                    }
-                    cx += g.adv * s;
-                    continue;
-                }
-                // символа нет в TTF — запасная растровая таблица
-                let norm = match ch {
-                    '—' | '–' | '−' => '-',
-                    '…' => '.',
-                    _ => ch,
-                };
-                let up: char = norm.to_uppercase().next().unwrap_or(norm);
-                let Some(bits) = self.fallback.get(&up).or_else(|| self.fallback.get(&'?')) else {
-                    cx += ((GLYPH_W + 1) as i32) * base;
-                    continue;
-                };
-                self.blit_fallback(buf, bw, bh, &mut cx, ry, bits, base, color, outline);
-                continue;
-            }
-            let Some(bits) = self.glyph(ch) else {
-                cx += ((GLYPH_W + 1) as i32) * base;
-                continue;
-            };
-            self.blit_fallback(buf, bw, bh, &mut cx, ry, bits, base, color, outline);
-        }
-    }
-
-    fn blit_mask(
-        &self,
-        buf: &mut [u8],
-        bw: usize,
-        bh: usize,
-        x: i32,
-        y: i32,
-        g: &GlyphRaster,
-        s: i32,
-        color: u8,
-    ) {
-        for my in 0..g.h {
-            for mx in 0..g.w {
-                if g.mask[my * g.w + mx] == 0 {
-                    continue;
-                }
-                for sy in 0..s {
-                    for sx in 0..s {
-                        put_raw(buf, bw, bh, x + mx as i32 * s + sx, y + my as i32 * s + sy, color);
-                    }
-                }
-            }
-        }
-    }
-
+    /// Вписывает и рисует слева. Возвращает высоту строки.
     #[allow(clippy::too_many_arguments)]
+    pub fn draw_fit(
+        &self,
+        canvas: &mut Canvas,
+        x: i32,
+        y: i32,
+        w: i32,
+        text: &str,
+        max_size: usize,
+        col: [u8; 3],
+        a: u8,
+    ) -> i32 {
+        let s0 = pick(max_size);
+        let s = if self.w(text, s0) <= w {
+            s0
+        } else {
+            self.fit(text, w, s0)
+        };
+        self.draw_sh(canvas, x, y, text, s, col, a);
+        self.line(s)
+    }
+
+    fn blit_glyph(&self, canvas: &mut Canvas, x: i32, y: i32, g: &Glyph, col: [u8; 3], a: u8) {
+        if a == 0 {
+            return;
+        }
+        for my in 0..g.h as i32 {
+            for mx in 0..g.w as i32 {
+                let v = g.cov[my as usize * g.w + mx as usize];
+                if v == 0 {
+                    continue;
+                }
+                let alpha = ((a as u32 * v as u32) / 255).min(255) as u8;
+                canvas.blend(x + mx, y + my, col, alpha);
+            }
+        }
+    }
+
     fn blit_fallback(
         &self,
-        buf: &mut [u8],
-        bw: usize,
-        bh: usize,
+        canvas: &mut Canvas,
         cx: &mut i32,
-        y: i32,
-        bits: &[u8; GLYPH_H],
-        s: i32,
-        color: u8,
-        outline: Option<u8>,
+        baseline: i32,
+        size: usize,
+        ch: &char,
+        col: [u8; 3],
+        a: u8,
     ) {
-        if let Some(o) = outline {
-            for (r, row) in bits.iter().enumerate() {
-                for c in 0..GLYPH_W {
-                    if row & (1 << (GLYPH_W - 1 - c)) != 0 {
-                        for sy in 0..s {
-                            for sx in 0..s {
-                                let px = *cx + c as i32 * s + sx + s;
-                                let py = y + r as i32 * s + sy + s;
-                                put_raw(buf, bw, bh, px, py, o);
-                            }
-                        }
+        let scale = (size as i32 / 6).max(1);
+        let bits = match self.fallback.get(ch).or_else(|| self.fallback.get(&'?')) {
+            Some(b) => b,
+            None => {
+                *cx += (GLYPH_W as i32 + 1) * scale;
+                return;
+            }
+        };
+        // верх прописных на базовой линии, как у TTF (капс 5 строк)
+        let top = baseline - 5 * scale;
+        for r in 0..GLYPH_H as i32 {
+            for c in 0..GLYPH_W as i32 {
+                let on = bits[r as usize] & (1 << (GLYPH_W as i32 - 1 - c)) != 0;
+                if !on {
+                    continue;
+                }
+                let x = *cx + c * scale;
+                let y = top + r * scale;
+                for dy in 0..scale {
+                    for dx in 0..scale {
+                        canvas.blend(x + dx, y + dy, col, a);
                     }
                 }
             }
         }
-        for (r, row) in bits.iter().enumerate() {
-            for c in 0..GLYPH_W {
-                if row & (1 << (GLYPH_W - 1 - c)) != 0 {
-                    for sy in 0..s {
-                        for sx in 0..s {
-                            let px = *cx + c as i32 * s + sx;
-                            let py = y + r as i32 * s + sy;
-                            put_raw(buf, bw, bh, px, py, color);
-                        }
-                    }
-                }
-            }
-        }
-        *cx += ((GLYPH_W + 1) as i32) * s;
+        *cx += (GLYPH_W as i32 + 1) * scale;
     }
 }
 
-/// Пиксель в реальных координатах буфера (без масштаба) — для внутренних
-/// блитов шрифта.
-fn put_raw(buf: &mut [u8], bw: usize, bh: usize, x: i32, y: i32, c: u8) {
-    if x >= 0 && y >= 0 && (x as usize) < bw && (y as usize) < bh {
-        buf[y as usize * bw + x as usize] = c;
-    }
-}
-
-/// Пиксель UI в дизайновых координатах: рисуется блоком UI_SCALE×UI_SCALE,
-/// чтобы панели/иконки/облачка выглядели так же, но вдвое крупнее.
-pub fn put(buf: &mut [u8], bw: usize, bh: usize, x: i32, y: i32, c: u8) {
-    let (rx, ry) = (x * UI_SCALE, y * UI_SCALE);
-    for dy in 0..UI_SCALE {
-        for dx in 0..UI_SCALE {
-            put_raw(buf, bw, bh, rx + dx, ry + dy, c);
-        }
-    }
-}
-
-pub fn rect(buf: &mut [u8], bw: usize, bh: usize, x: i32, y: i32, w: i32, h: i32, c: u8) {
-    let (rx, ry, rw, rh) = (x * UI_SCALE, y * UI_SCALE, w * UI_SCALE, h * UI_SCALE);
-    for yy in ry..ry + rh {
-        for xx in rx..rx + rw {
-            put_raw(buf, bw, bh, xx, yy, c);
-        }
-    }
-}
-
-pub fn frame_rect(buf: &mut [u8], bw: usize, bh: usize, x: i32, y: i32, w: i32, h: i32, c: u8) {
-    let (rx, ry, rw, rh) = (x * UI_SCALE, y * UI_SCALE, w * UI_SCALE, h * UI_SCALE);
-    for xx in rx..rx + rw {
-        put_raw(buf, bw, bh, xx, ry, c);
-        put_raw(buf, bw, bh, xx, ry + rh - 1, c);
-    }
-    for yy in ry..ry + rh {
-        put_raw(buf, bw, bh, rx, yy, c);
-        put_raw(buf, bw, bh, rx + rw - 1, yy, c);
-    }
-}
