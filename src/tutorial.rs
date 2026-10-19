@@ -20,15 +20,15 @@ pub struct TutStep {
 pub const TUT_STEPS: [TutStep; 7] = [
     TutStep {
         text: "ШАГ 1/7. ВОЗЬМИТЕ СУХАРИ У ПОЛКИ (E)",
-        target: (2.5, 6.5),
+        target: (3.5, 6.5),
     },
     TutStep {
         text: "ШАГ 2/7. НАБЕРИТЕ ВОДУ У КОЛОНКИ (E)",
-        target: (5.5, 6.5),
+        target: (6.5, 6.5),
     },
     TutStep {
         text: "ШАГ 3/7. ВОЗЬМИТЕ САХАР С ИЗЮМОМ (E)",
-        target: (4.5, 6.5),
+        target: (5.5, 6.5),
     },
     TutStep {
         text: "ШАГ 4/7. К БОЧКЕ: E ТРИЖДЫ (СУХАРИ-ВОДА-САХАР)",
@@ -36,7 +36,7 @@ pub const TUT_STEPS: [TutStep; 7] = [
     },
     TutStep {
         text: "ШАГ 5/7. ВОЗЬМИТЕ СТАКАН СО СТЕЛЛАЖА (E)",
-        target: (7.5, 6.5),
+        target: (8.5, 6.5),
     },
     TutStep {
         text: "ШАГ 6/7. КВАС ГОТОВ: ДЕРЖИТЕ E У БОЧКИ",
