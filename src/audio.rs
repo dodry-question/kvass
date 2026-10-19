@@ -1,0 +1,452 @@
+//! Звук: процедурная генерация .wav (22 кГц, моно) + воспроизведение.
+//! Позже можно заменить файлы своими сэмплами — имена те же.
+
+use std::collections::HashMap;
+use std::io::Write;
+use std::path::PathBuf;
+
+use bevy::audio::AudioSink;
+use bevy::prelude::*;
+
+use crate::day_cycle::{GameState, Phase};
+
+const SR: u32 = 22050;
+
+pub struct Sfx;
+
+pub const SOUNDS: &[&str] = &[
+    "pour", "croutons", "water", "hiss", "ding", "hiss2", "fooff", "coin", "step1", "step2",
+    "door", "whistle", "pop", "bubble_loop", "street_loop",
+];
+
+fn write_wav(path: &PathBuf, samples: &[f32]) {
+    if path.exists() {
+        return;
+    }
+    let mut f = std::io::BufWriter::new(std::fs::File::create(path).expect("wav create"));
+    let data_len = (samples.len() * 2) as u32;
+    let sr = SR;
+    f.write_all(b"RIFF").unwrap();
+    f.write_all(&(36 + data_len).to_le_bytes()).unwrap();
+    f.write_all(b"WAVE").unwrap();
+    f.write_all(b"fmt ").unwrap();
+    f.write_all(&16u32.to_le_bytes()).unwrap();
+    f.write_all(&1u16.to_le_bytes()).unwrap(); // PCM
+    f.write_all(&1u16.to_le_bytes()).unwrap(); // mono
+    f.write_all(&sr.to_le_bytes()).unwrap();
+    f.write_all(&(sr * 2).to_le_bytes()).unwrap();
+    f.write_all(&2u16.to_le_bytes()).unwrap();
+    f.write_all(&16u16.to_le_bytes()).unwrap();
+    f.write_all(b"data").unwrap();
+    f.write_all(&data_len.to_le_bytes()).unwrap();
+    for s in samples {
+        let v = (s.clamp(-1.0, 1.0) * 32000.0) as i16;
+        f.write_all(&v.to_le_bytes()).unwrap();
+    }
+}
+
+/// Детерминированный шум (xorshift).
+struct Noise(u32);
+impl Noise {
+    fn next(&mut self) -> f32 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 17;
+        self.0 ^= self.0 << 5;
+        (self.0 as f32 / u32::MAX as f32) * 2.0 - 1.0
+    }
+}
+
+fn env(t: f32, dur: f32, attack: f32, release: f32) -> f32 {
+    let a = (t / attack).min(1.0);
+    let r = ((dur - t) / release).min(1.0);
+    a.max(0.0) * r.max(0.0)
+}
+
+/// Генерирует все звуки в assets/sounds (если файлов нет).
+pub fn generate_files() {
+    let dir = PathBuf::from("assets/sounds");
+    std::fs::create_dir_all(&dir).unwrap();
+
+    // литьё кваса: шипение + бульканье
+    {
+        let dur = 1.3;
+        let n = (SR as f32 * dur) as usize;
+        let mut noise = Noise(12345);
+        let mut lp = 0.0f32;
+        let mut out = Vec::with_capacity(n);
+        for i in 0..n {
+            let t = i as f32 / SR as f32;
+            let x = noise.next();
+            lp = lp * 0.7 + x * 0.3;
+            let fizz = x * 0.5 + lp * 0.5;
+            let gurgle = (t * 90.0 + (t * 7.0).sin() * 4.0).sin() * 0.25;
+            let s = (fizz * 0.5 + gurgle) * env(t, dur, 0.05, 0.3) * 0.8;
+            out.push(s);
+        }
+        write_wav(&dir.join("pour.wav"), &out);
+    }
+    // засыпание сухарей: сухой шорох
+    {
+        let dur = 0.45;
+        let n = (SR as f32 * dur) as usize;
+        let mut noise = Noise(777);
+        let mut out = Vec::with_capacity(n);
+        for i in 0..n {
+            let t = i as f32 / SR as f32;
+            let x = noise.next();
+            let crack = if noise.next() > 0.92 { noise.next() } else { 0.0 };
+            let s = (x * 0.25 + crack * 0.75) * env(t, dur, 0.01, 0.25) * 0.7;
+            out.push(s);
+        }
+        write_wav(&dir.join("croutons.wav"), &out);
+    }
+    // вода из ведра: ниже и с бульканьем
+    {
+        let dur = 0.7;
+        let n = (SR as f32 * dur) as usize;
+        let mut noise = Noise(4242);
+        let mut lp = 0.0f32;
+        let mut out = Vec::with_capacity(n);
+        for i in 0..n {
+            let t = i as f32 / SR as f32;
+            lp = lp * 0.85 + noise.next() * 0.15;
+            let gurgle = ((t * 55.0).sin() * (t * 13.0).sin()).max(0.0) * 0.5;
+            let s = (lp * 0.6 + gurgle * 0.4) * env(t, dur, 0.03, 0.3) * 0.8;
+            out.push(s);
+        }
+        write_wav(&dir.join("water.wav"), &out);
+    }
+    // «пшшш» — брожение пошло на взлёт
+    {
+        let dur = 0.5;
+        let n = (SR as f32 * dur) as usize;
+        let mut noise = Noise(999);
+        let mut hp = 0.0f32;
+        let mut out = Vec::with_capacity(n);
+        for i in 0..n {
+            let t = i as f32 / SR as f32;
+            let x = noise.next();
+            hp = x - hp * 0.2;
+            let s = hp * env(t, dur, 0.02, 0.2) * 0.6;
+            out.push(s);
+        }
+        write_wav(&dir.join("hiss.wav"), &out);
+    }
+    // «плюх/пип» — квас готов
+    {
+        let dur = 0.3;
+        let n = (SR as f32 * dur) as usize;
+        let mut out = Vec::with_capacity(n);
+        for i in 0..n {
+            let t = i as f32 / SR as f32;
+            let f = if t < 0.1 { 880.0 } else { 1320.0 };
+            let sq = ((t * f * 6.28318).sin().signum()) * 0.5;
+            let s = sq * env(t, dur, 0.005, 0.12) * 0.7;
+            out.push(s);
+        }
+        write_wav(&dir.join("ding.wav"), &out);
+    }
+    // нарастающее шипение — окно переброда
+    {
+        let dur = 0.9;
+        let n = (SR as f32 * dur) as usize;
+        let mut noise = Noise(31337);
+        let mut lp = 0.0f32;
+        let mut out = Vec::with_capacity(n);
+        for i in 0..n {
+            let t = i as f32 / SR as f32;
+            lp = lp * 0.6 + noise.next() * 0.4;
+            let gain = (t / dur).powf(1.5);
+            let s = lp * gain * env(t, dur, 0.05, 0.05) * 0.7;
+            out.push(s);
+        }
+        write_wav(&dir.join("hiss2.wav"), &out);
+    }
+    // «фьююю» — переброд, испорчено
+    {
+        let dur = 1.0;
+        let n = (SR as f32 * dur) as usize;
+        let mut noise = Noise(5150);
+        let mut lp = 0.0f32;
+        let mut out = Vec::with_capacity(n);
+        for i in 0..n {
+            let t = i as f32 / SR as f32;
+            let k = 0.9 - (t / dur) * 0.7;
+            lp = lp * k + noise.next() * (1.0 - k);
+            let low = lp * 0.7 + (t * (300.0 - t * 200.0)).sin() * 0.3;
+            let s = low * env(t, dur, 0.03, 0.6) * 0.8;
+            out.push(s);
+        }
+        write_wav(&dir.join("fooff.wav"), &out);
+    }
+    // звон монетки
+    {
+        let dur = 0.25;
+        let n = (SR as f32 * dur) as usize;
+        let mut out = Vec::with_capacity(n);
+        for i in 0..n {
+            let t = i as f32 / SR as f32;
+            let f = if t < 0.08 { 2093.0 } else { 2637.0 };
+            let sq = ((t * f * 6.28318).sin().signum()) * 0.4;
+            let s = sq * env(t, dur, 0.002, 0.1) * 0.6;
+            out.push(s);
+        }
+        write_wav(&dir.join("coin.wav"), &out);
+    }
+    // шаги (2 варианта)
+    for (name, seed) in [("step1", 11u32), ("step2", 22u32)] {
+        let dur = 0.12;
+        let n = (SR as f32 * dur) as usize;
+        let mut noise = Noise(seed);
+        let mut out = Vec::with_capacity(n);
+        for i in 0..n {
+            let t = i as f32 / SR as f32;
+            let thump = (t * 80.0 * 6.28318).sin() * 0.7;
+            let scuff = noise.next() * 0.25;
+            let s = (thump + scuff) * env(t, dur, 0.002, 0.08) * 0.5;
+            out.push(s);
+        }
+        write_wav(&dir.join(format!("{name}.wav")), &out);
+    }
+    // скрип двери
+    {
+        let dur = 0.5;
+        let n = (SR as f32 * dur) as usize;
+        let mut out = Vec::with_capacity(n);
+        for i in 0..n {
+            let t = i as f32 / SR as f32;
+            let f = 300.0 - t * 250.0 + (t * 31.0).sin() * 30.0;
+            let s = ((t * f * 6.28318).sin()) * env(t, dur, 0.05, 0.3) * 0.4;
+            out.push(s);
+        }
+        write_wav(&dir.join("door.wav"), &out);
+    }
+    // свисток милиционера
+    {
+        let dur = 0.5;
+        let n = (SR as f32 * dur) as usize;
+        let mut out = Vec::with_capacity(n);
+        for i in 0..n {
+            let t = i as f32 / SR as f32;
+            let trem = 1.0 + (t * 30.0).sin() * 0.3;
+            let sq = ((t * 1400.0 * 6.28318).sin().signum()) * 0.4 * trem;
+            let s = sq * env(t, dur, 0.02, 0.15) * 0.6;
+            out.push(s);
+        }
+        write_wav(&dir.join("whistle.wav"), &out);
+    }
+    // «поп» — откупорка
+    {
+        let dur = 0.15;
+        let n = (SR as f32 * dur) as usize;
+        let mut noise = Noise(808);
+        let mut out = Vec::with_capacity(n);
+        for i in 0..n {
+            let t = i as f32 / SR as f32;
+            let click = noise.next() * (-(t * 60.0)).exp();
+            let tone = (t * (400.0 - t * 1500.0) * 6.28318).sin() * (-(t * 30.0)).exp();
+            let s = (click * 0.6 + tone * 0.4) * 0.8;
+            out.push(s);
+        }
+        write_wav(&dir.join("pop.wav"), &out);
+    }
+    // бурление бочки (петля)
+    {
+        let dur = 2.0;
+        let n = (SR as f32 * dur) as usize;
+        let mut noise = Noise(6060);
+        let mut lp = 0.0f32;
+        let mut out = Vec::with_capacity(n);
+        for i in 0..n {
+            let t = i as f32 / SR as f32;
+            lp = lp * 0.8 + noise.next() * 0.2;
+            let wob = (t * 0.9).sin() * 0.5 + 0.5;
+            let bubble = if ((t * 7.3).fract()) < 0.12 { 0.4 } else { 0.0 };
+            let s = (lp * 0.3 + bubble * (t * 140.0 * 6.28318).sin() * 0.4) * (0.4 + wob * 0.6) * 0.5;
+            out.push(s);
+        }
+        write_wav(&dir.join("bubble_loop.wav"), &out);
+    }
+    // улица: летний гул + насекомые (петля)
+    {
+        let dur = 3.0;
+        let n = (SR as f32 * dur) as usize;
+        let mut noise = Noise(2024);
+        let mut lp = 0.0f32;
+        let mut out = Vec::with_capacity(n);
+        for i in 0..n {
+            let t = i as f32 / SR as f32;
+            lp = lp * 0.95 + noise.next() * 0.05;
+            // стрёкот: короткие чирки 4 кГц
+            let chirp_phase = (t * 2.7).fract();
+            let cricket = if chirp_phase < 0.06 {
+                ((t * 4000.0 * 6.28318).sin()) * 0.25
+            } else {
+                0.0
+            };
+            let s = lp * 0.5 + cricket;
+            out.push(s);
+        }
+        write_wav(&dir.join("street_loop.wav"), &out);
+    }
+}
+
+/// Банк загруженных сэмплов.
+#[derive(Resource)]
+pub struct SoundBank {
+    pub handles: HashMap<String, Handle<AudioSource>>,
+    pub step_toggle: bool,
+    pub step_t: f32,
+    pub last_customers: usize,
+    pub ambience_on: bool,
+}
+
+pub fn load_bank(mut commands: Commands, server: Res<AssetServer>) {
+    generate_files();
+    let mut handles = HashMap::new();
+    for name in SOUNDS {
+        let h: Handle<AudioSource> = server.load(format!("sounds/{name}.wav"));
+        handles.insert(name.to_string(), h);
+    }
+    commands.insert_resource(SoundBank {
+        handles,
+        step_toggle: false,
+        step_t: 0.0,
+        last_customers: 0,
+        ambience_on: false,
+    });
+}
+
+/// Играет сэмпл (одноразово).
+pub fn play_sfx(commands: &mut Commands, bank: &SoundBank, name: &str, volume: f32) {
+    if let Some(h) = bank.handles.get(name) {
+        commands.spawn((
+            AudioPlayer::new(h.clone()),
+            PlaybackSettings {
+                mode: bevy::audio::PlaybackMode::Despawn,
+                volume: bevy::audio::Volume::Linear(volume),
+                ..default()
+            },
+        ));
+    }
+}
+
+/// Маркер петель-фонов.
+#[derive(Component)]
+pub struct LoopMark(pub &'static str);
+
+/// Фон: улица и бурление бочки во время дня.
+pub fn ambience(
+    mut commands: Commands,
+    bank: Res<SoundBank>,
+    state: Res<GameState>,
+    mut was_playing: Local<bool>,
+    loops: Query<(Entity, &LoopMark)>,
+) {
+    let playing = state.phase == Phase::Playing;
+    if playing && !*was_playing {
+        if let Some(h) = bank.handles.get("street_loop") {
+            commands.spawn((
+                AudioPlayer::new(h.clone()),
+                PlaybackSettings {
+                    mode: bevy::audio::PlaybackMode::Loop,
+                    volume: bevy::audio::Volume::Linear(0.35),
+                    ..default()
+                },
+                LoopMark("street"),
+            ));
+        }
+        if let Some(h) = bank.handles.get("bubble_loop") {
+            commands.spawn((
+                AudioPlayer::new(h.clone()),
+                PlaybackSettings {
+                    mode: bevy::audio::PlaybackMode::Loop,
+                    volume: bevy::audio::Volume::Linear(0.0),
+                    ..default()
+                },
+                LoopMark("bubble"),
+            ));
+        }
+    }
+    if !playing && *was_playing {
+        for (e, _) in &loops {
+            commands.entity(e).despawn();
+        }
+    }
+    *was_playing = playing;
+}
+
+/// Громкость бурления — тише, когда игрок далеко от бочки.
+pub fn bubble_volume(
+    cam: Res<crate::raycaster::GameCam>,
+    barrels: Res<crate::brewing::Barrels>,
+    mut loops: Query<(&LoopMark, &mut AudioSink)>,
+) {
+    let mut dist = f32::MAX;
+    for &(x, y) in barrels.map.keys() {
+        let d = ((x as f32 + 0.5 - cam.x).powi(2) + (y as f32 + 0.5 - cam.y).powi(2)).sqrt();
+        dist = dist.min(d);
+    }
+    let vol = (1.0 - dist / 6.0).clamp(0.0, 1.0) * 0.5;
+    for (mark, mut sink) in &mut loops {
+        if mark.0 == "bubble" {
+            sink.set_volume(bevy::audio::Volume::Linear(vol));
+        }
+    }
+}
+
+/// Шаги при ходьбе.
+pub fn footsteps(
+    time: Res<Time>,
+    keys: Res<ButtonInput<KeyCode>>,
+    state: Res<GameState>,
+    mut bank: ResMut<SoundBank>,
+    mut commands: Commands,
+) {
+    if state.phase != Phase::Playing {
+        return;
+    }
+    let moving = keys.pressed(KeyCode::KeyW)
+        || keys.pressed(KeyCode::KeyS)
+        || keys.pressed(KeyCode::KeyA)
+        || keys.pressed(KeyCode::KeyD)
+        || keys.pressed(KeyCode::ArrowUp)
+        || keys.pressed(KeyCode::ArrowDown);
+    if !moving {
+        bank.step_t = 0.0;
+        return;
+    }
+    bank.step_t -= time.delta_secs();
+    if bank.step_t <= 0.0 {
+        bank.step_t = 0.38;
+        bank.step_toggle = !bank.step_toggle;
+        let name = if bank.step_toggle { "step1" } else { "step2" };
+        play_sfx(&mut commands, &bank, name, 0.4);
+    }
+}
+
+/// Звонки при сигналах бочки + дверь при новых покупателях.
+pub fn event_sounds(
+    mut commands: Commands,
+    mut barrels: ResMut<crate::brewing::Barrels>,
+    customers: Query<&crate::customer::Customer>,
+    mut bank: ResMut<SoundBank>,
+) {
+    for b in barrels.map.values_mut() {
+        if let Some(sig) = b.signal.take() {
+            use crate::brewing::BarrelSignal::*;
+            let name = match sig {
+                AlmostReady => "hiss",
+                Ready => "ding",
+                OverripeStart => "hiss2",
+                Ruined => "fooff",
+            };
+            play_sfx(&mut commands, &bank, name, 0.7);
+        }
+    }
+    let n = customers.iter().count();
+    if n > bank.last_customers {
+        play_sfx(&mut commands, &bank, "door", 0.5);
+    }
+    bank.last_customers = n;
+}
