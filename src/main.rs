@@ -55,6 +55,32 @@ struct ScreenImage(Handle<Image>);
 struct ScreenUi(Handle<Image>);
 
 /// Каталог assets: рядом с exe, в текущей папке или в исходниках (dev-сборка).
+/// Настройка окна: полноэкранный borderless либо окно, если задана
+/// переменная `KVASS_WINDOWED` (например `KVASS_WINDOWED=1280x800`) —
+/// так удобно запускать под Wine/Bottles, где borderless может не открыться.
+fn window_setup() -> Window {
+    let title = "КВАСНАЯ ЛАВКА".to_string();
+    match std::env::var("KVASS_WINDOWED") {
+        Ok(v) => {
+            let (w, h) = v
+                .split_once('x')
+                .and_then(|(a, b)| Some((a.parse().ok()?, b.parse().ok()?)))
+                .unwrap_or((1280, 800));
+            Window {
+                title,
+                mode: WindowMode::Windowed,
+                resolution: (w, h).into(),
+                ..default()
+            }
+        }
+        Err(_) => Window {
+            title,
+            mode: WindowMode::BorderlessFullscreen(MonitorSelection::Primary),
+            ..default()
+        },
+    }
+}
+
 pub fn assets_root() -> std::path::PathBuf {
     let mut bases: Vec<std::path::PathBuf> = Vec::new();
     if let Ok(exe) = std::env::current_exe() {
@@ -107,11 +133,7 @@ fn main() {
                     ..default()
                 })
                 .set(WindowPlugin {
-                    primary_window: Some(Window {
-                        title: "КВАСНАЯ ЛАВКА".into(),
-                        mode: WindowMode::BorderlessFullscreen(MonitorSelection::Primary),
-                        ..default()
-                    }),
+                    primary_window: Some(window_setup()),
                     ..default()
                 }),
         )
