@@ -114,27 +114,44 @@ pub fn interact(
                     _ => {
                         if inv.drain_sugar() {
                             let t = crate::brewing::random_brew_time(rng);
-                            b.phase = BarrelPhase::Ferment(t);
+                            b.brew_time = t;
+                            b.phase = BarrelPhase::Ferment(0.0);
                             b.step = 0;
                             crate::audio::play_sfx(&mut commands, &bank, "pop", 0.7);
-                            state.notify(format!("САХАР ДОБАВЛЕН. БРОДИТ ~{:.0} СЕК", t));
+                            state.notify(format!(
+                                "САХАР ДОБАВЛЕН. БРОДИТ ~{:.0} СЕК. ПРОБЕЛ — УСКОРИТЬ",
+                                t
+                            ));
                         } else {
                             state.notify("НУЖЕН САХАР С ИЗЮМОМ — ПОЛКА (E)".into());
                         }
                     }
                 },
-                BarrelPhase::Ferment(_) => {
-                    state.notify("БОЧКА БРОДИТ — ПОДОЖДИТЕ".into());
+                BarrelPhase::Ferment(p) => {
+                    state.notify(format!(
+                        "БРОДИТ {}%. ПРОБЕЛ — ПОДНАЖАТЬ (+{}%)",
+                        p as i32,
+                        crate::brewing::QTE_BONUS as i32
+                    ));
                 }
-                BarrelPhase::Ready(t) => {
+                BarrelPhase::Ready(p) => {
                     if b.portions == 0 {
-                        state.notify(format!("ПУСТО! СВАРИТЕ НОВЫЙ. {t:.0} СЕК ДО ПЕРЕБРОДА"));
+                        state.notify(format!(
+                            "ПУСТО! СВАРИТЕ НОВЫЙ. {:.0} СЕК ДО ПЕРЕБРОДА",
+                            crate::brewing::seconds_to_next(b)
+                        ));
                     } else {
-                        state.notify(format!("ГОТОВА! ДЕРЖИТЕ E ({} ПОРЦИЙ)", b.portions));
+                        state.notify(format!(
+                            "ГОТОВА {}%! ДЕРЖИТЕ E ({} ПОРЦИЙ)",
+                            p as i32, b.portions
+                        ));
                     }
                 }
-                BarrelPhase::Overripe(t) => {
-                    state.notify(format!("ПЕРЕБРОД! РАЗЛИВАЙТЕ, ЧТО ЕСТЬ ({t:.0} СЕК)"));
+                BarrelPhase::Overripe(_) => {
+                    state.notify(format!(
+                        "ПЕРЕБРОД! РАЗЛИВАЙТЕ, ЧТО ЕСТЬ ({:.0} СЕК)",
+                        crate::brewing::seconds_to_next(b)
+                    ));
                 }
                 BarrelPhase::Ruined => {
                     state.notify("ИСПОРЧЕНА. ДЕРЖИТЕ E — ПОМЫТЬ".into());
@@ -243,8 +260,11 @@ pub fn fill_hold(
     if !b.can_fill() {
         fill.progress = 0.0;
         if state.phase == Phase::Tutorial && holding {
-            if let BarrelPhase::Ferment(t) = b.phase {
-                state.notify(format!("КВАС ЕЩЁ БРОДИТ, ~{:.0} СЕК", t));
+            if let BarrelPhase::Ferment(p) = b.phase {
+                state.notify(format!(
+                    "КВАС ЕЩЁ БРОДИТ, {}%. ПОДОЖДИТЕ",
+                    p as i32
+                ));
             }
         }
         return;
@@ -285,6 +305,104 @@ pub fn fill_hold(
         fill.progress = 0.0;
         if b.portions == 0 {
             state.notify("БОЧКА ПУСТА! СВАРИТЕ НОВУЮ".into());
+        }
+    }
+}
+
+/// Мини-игра ускорения брожения: подошёл к бочке — снизу появляется полоска,
+/// по ней бегает бегунок, зона подсвечена. ПРОБЕЛ в зоне = +`QTE_BONUS`%.
+/// Если не подходить — брожение идёт обычной скоростью (авто-режим).
+pub fn brew_qte(
+    time: Res<Time>,
+    keys: Res<ButtonInput<KeyCode>>,
+    cam: Res<GameCam>,
+    map: Res<crate::map::Map>,
+    mut barrels: ResMut<Barrels>,
+    mut state: ResMut<GameState>,
+    mut qte: ResMut<crate::brewing::BrewQte>,
+    mut game_rng: ResMut<GameRng>,
+    mut commands: Commands,
+    bank: Res<crate::audio::SoundBank>,
+) {
+    let dt = time.delta_secs();
+    qte.flash = if qte.flash > 0.0 {
+        (qte.flash - dt).max(0.0)
+    } else {
+        (qte.flash + dt).min(0.0)
+    };
+    qte.lock = (qte.lock - dt).max(0.0);
+    if state.phase != Phase::Playing {
+        qte.reset();
+        return;
+    }
+
+    let (tx, ty) = front_tile(&cam);
+    let at_barrel = map.get(tx, ty) == Tile::Barrel;
+    let boostable = at_barrel
+        && barrels
+            .map
+            .get(&(tx, ty))
+            .map(|b| b.boostable())
+            .unwrap_or(false);
+    if !boostable {
+        // отошёл от бочки или она сменила фазу — полоска прячется
+        qte.reset();
+        return;
+    }
+
+    let mut rng = &mut game_rng.0;
+    let pressed = keys.just_pressed(KeyCode::Space);
+
+    if !qte.active {
+        if pressed {
+            qte.active = true;
+            qte.barrel = Some((tx, ty));
+            qte.pos = if rng.random_bool(0.5) { 0.0 } else { 1.0 };
+            qte.dir = if qte.pos == 0.0 { 1.0 } else { -1.0 };
+            qte.roll_zone(&mut rng);
+            // защита: это же нажатие не должно считаться ударом
+            qte.lock = 0.25;
+            crate::audio::play_sfx(&mut commands, &bank, "pop", 0.5);
+        }
+        return;
+    }
+
+    // бегунок бежит по полоске
+    let speed = 0.72;
+    qte.pos += qte.dir * speed * dt;
+    if qte.pos >= 1.0 {
+        qte.pos = 1.0;
+        qte.dir = -1.0;
+    } else if qte.pos <= 0.0 {
+        qte.pos = 0.0;
+        qte.dir = 1.0;
+    }
+
+    if pressed && qte.lock <= 0.0 {
+        qte.lock = 0.2;
+        if qte.pos >= qte.zone0 && qte.pos <= qte.zone1 {
+            if let Some(b) = barrels.mutable_at(tx, ty) {
+                b.boost();
+            }
+            qte.flash = 0.35;
+            qte.roll_zone(&mut rng);
+            crate::audio::play_sfx(&mut commands, &bank, "coin", 0.55);
+            if let Some(b) = barrels.map.get(&(tx, ty)) {
+                let pct = match b.phase {
+                    BarrelPhase::Ferment(p) => p,
+                    BarrelPhase::Ready(p) => p,
+                    _ => 0.0,
+                };
+                state.notify(format!(
+                    "+{}% — БРОДИТ {}%",
+                    crate::brewing::QTE_BONUS as i32,
+                    pct as i32
+                ));
+            }
+        } else {
+            qte.flash = -0.25;
+            crate::audio::play_sfx(&mut commands, &bank, "water", 0.4);
+            state.notify("МИМО! ПОДОЖДИТЕ БЕГУНКА В ЗОНЕ".into());
         }
     }
 }

@@ -6,7 +6,7 @@ use std::path::Path;
 
 use bevy::prelude::Vec2;
 
-use crate::brewing::{BarrelPhase, Barrels};
+use crate::brewing::{BarrelPhase, Barrels, BrewQte};
 use crate::day_cycle::{GameState, Phase};
 use crate::font::{rect, Font};
 use crate::inventory::{HandItem, Inventory};
@@ -46,6 +46,7 @@ pub fn run() {
         angle: -std::f32::consts::FRAC_PI_2 - 0.4,
     };
     let empty = ui::CustomerView { list: &[] };
+    let no_qte = BrewQte::default();
 
     // --- 1. Главное меню ---
     let state = GameState {
@@ -58,6 +59,7 @@ pub fn run() {
         &state,
         &Inventory::default(),
         &Barrels::from_map(&map),
+        &no_qte,
         &empty,
         1.0,
         &cam,
@@ -88,6 +90,7 @@ pub fn run() {
         &state,
         &inv,
         &Barrels::from_map(&map),
+        &no_qte,
         &empty,
         2.0,
         &cam,
@@ -105,14 +108,14 @@ pub fn run() {
         b.step = 0;
     }
     if let Some(b) = barrels.map.get_mut(&keys[1]) {
-        b.phase = BarrelPhase::Ferment(40.0);
+        b.phase = BarrelPhase::Ferment(42.0);
         b.step = 2;
     }
     if let (Some(b0), Some(b1)) = (keys.get(0), keys.get(1)) {
         if b0 != b1 {
             // две бочки с разными фазами — как советует игра
             if let Some(b) = barrels.map.get_mut(b1) {
-                b.phase = BarrelPhase::Ready(12.0);
+                b.phase = BarrelPhase::Ready(104.0);
                 b.portions = 13;
             }
         }
@@ -158,7 +161,7 @@ pub fn run() {
     renderer.render(&map, &textures, &cam, 1.0);
     let list: Vec<(Vec2, NpcKind)> = renders.iter().map(|r| (r.pos, r.kind)).collect();
     renderer.draw_sprites(&sprites, &list, &cam, 1.0);
-    ui::draw_frame(&mut renderer, &font, &state, &inv, &barrels, &view, 3.5, &cam, &map);
+    ui::draw_frame(&mut renderer, &font, &state, &inv, &barrels, &no_qte, &view, 3.5, &cam, &map);
     renderer.present();
     write_bmp(&out.join("3_playing.bmp"), &renderer.rgba);
 
@@ -179,6 +182,7 @@ pub fn run() {
         &state,
         &inv,
         &Barrels::from_map(&map),
+        &no_qte,
         &empty,
         4.0,
         &cam,
@@ -198,6 +202,7 @@ pub fn run() {
         &state,
         &inv,
         &Barrels::from_map(&map),
+        &no_qte,
         &empty,
         5.0,
         &cam,
@@ -287,7 +292,7 @@ pub fn run() {
     let tut_view = ui::CustomerView { list: &tut_renders };
     renderer.render(&map, &textures, &cam, 1.0);
     renderer.draw_sprites(&sprites, &[(Vec2::new(3.5, 2.7), NpcKind::Grandma)], &cam, 1.0);
-    ui::draw_frame(&mut renderer, &font, &state, &inv, &barrels, &tut_view, 1.5, &cam, &map);
+    ui::draw_frame(&mut renderer, &font, &state, &inv, &barrels, &no_qte, &tut_view, 1.5, &cam, &map);
     renderer.present();
     write_bmp(&out.join("7_tutorial.bmp"), &renderer.rgba);
 
@@ -339,12 +344,12 @@ pub fn run() {
     renderer.present();
     write_bmp(&out.join("9_spriteonly.bmp"), &renderer.rgba);
 
-    // --- 10. Камера вплотную к прилавку (0.5 тайла) — раньше при таком
+    // --- 10. Камера вплотную к прилавку (0.15 тайла) — раньше при таком
     //     расстоянии он схлопывался до фиксированной высоты (баг «сжатия»).
-    //     Спрайт бабушки тоже вблизи — проверка масштаба людей.
+    //     Спрайт бабушки вблизи — проверка масштаба людей.
     let close_cam = GameCam {
         x: 5.5,
-        y: 3.2,
+        y: 4.15,
         angle: -std::f32::consts::FRAC_PI_2,
     };
     renderer.render(&map, &textures, &close_cam, 1.0);
@@ -361,6 +366,54 @@ pub fn run() {
     renderer.render(&map, &textures, &wall_cam, 1.0);
     renderer.present();
     write_bmp(&out.join("11_wallclose.bmp"), &renderer.rgba);
+
+    // --- 12. Полоска ускорения брожения (мини-игра на ПРОБЕЛЕ) ---
+    let qte = BrewQte {
+        active: true,
+        pos: 0.48,
+        dir: 1.0,
+        zone0: 0.42,
+        zone1: 0.54,
+        barrel: Some(keys[1]),
+        lock: 0.0,
+        flash: 0.0,
+    };
+    let qte_state = GameState {
+        phase: Phase::Playing,
+        day: 1,
+        money: 12,
+        norm: 90,
+        day_earned: 12,
+        time_left: 300.0,
+        msg: "САХАР ДОБАВЛЕН. БРОДИТ ~70 СЕК. ПРОБЕЛ — УСКОРИТЬ".into(),
+        msg_t: 3.0,
+        ..Default::default()
+    };
+    let qte_inv = Inventory {
+        hands: [Some(HandItem::Bucket), None, None, None],
+        selected: 0,
+        stock_croutons: 2,
+        stock_sugar: 1,
+        stock_glass: 4,
+        stock_jar: 2,
+        stock_bottle: 1,
+    };
+    let qte_renders = vec![ui::CustomerRender {
+        kind: NpcKind::Worker,
+        pos: Vec2::new(5.5, 2.7),
+        bubble: Some("Ну и как там, бродит?".into()),
+    }];
+    let qte_view = ui::CustomerView { list: &qte_renders };
+    renderer.render(&map, &textures, &cam, 1.0);
+    renderer.draw_sprites(
+        &sprites,
+        &[(Vec2::new(5.5, 2.7), NpcKind::Worker)],
+        &cam,
+        1.0,
+    );
+    ui::draw_frame(&mut renderer, &font, &qte_state, &qte_inv, &barrels, &qte, &qte_view, 6.0, &cam, &map);
+    renderer.present();
+    write_bmp(&out.join("12_qte.bmp"), &renderer.rgba);
 
     println!("selftest: кадры записаны в {}/", out.display());
 }

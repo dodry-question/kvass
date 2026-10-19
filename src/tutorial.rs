@@ -72,11 +72,12 @@ pub fn tutorial_system(
         return;
     }
 
-    // в обучении квас бродит быстро (8 сек), чтобы не ждать минуту
+    // в обучении квас бродит быстро (осталось 8 сек), чтобы не ждать минуту
     for b in barrels.map.values_mut() {
-        if let BarrelPhase::Ferment(t) = &mut b.phase {
-            if *t > 8.0 {
-                *t = 8.0;
+        if let BarrelPhase::Ferment(p) = &mut b.phase {
+            let fast = (1.0 - 8.0 / b.brew_time.max(1.0)) * 100.0;
+            if *p < fast {
+                *p = fast;
             }
         }
     }

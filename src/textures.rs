@@ -171,34 +171,65 @@ fn gen_barrel(t: &mut Vec<u8>) {
     }
 }
 
+/// Прилавок. Раньше по всей ширине шли чёрные вертикальные швы каждые 16px,
+/// из-за которых один сплошной прилавок читался как несколько отдельных будок.
+/// Теперь — сплошная горизонтальная конструкция: кромка, единая красная
+/// лента «КВАС» и цоколь; вертикаль только в виде мягкого древесного шва.
 fn gen_counter(t: &mut Vec<u8>) {
     let mut rng = StdRng::seed_from_u64(4);
     for y in 0..TEX_SIZE {
         for x in 0..TEX_SIZE {
-            let c = if y < 8 {
-                // кромка прилавка — светлое дерево
-                noisy(&mut rng, idx::WOOD_LIGHT, idx::WOOD_DARK, 0.08)
-            } else if y == 8 || y == 55 {
-                idx::BLACK
-            } else if y >= 56 {
-                // цоколь
-                noisy(&mut rng, idx::WOOD_DARK, idx::SHADOW, 0.1)
-            } else if (26..34).contains(&y) {
-                // красная роспись «КВАС» с белыми штрихами
-                if y == 27 || y == 32 {
+            let c = if y < 7 {
+                // кромка прилавка — светлое дерево, волокна по горизонтали
+                if y == 0 {
+                    idx::PLASTER
+                } else if y < 3 {
+                    noisy(&mut rng, idx::WOOD_LIGHT, idx::PLASTER, 0.1)
+                } else {
+                    noisy(&mut rng, idx::WOOD_LIGHT, idx::WOOD_DARK, 0.1)
+                }
+            } else if y == 7 || y == 8 {
+                // тень под кромкой — держит единство на всю длину
+                if y == 7 { idx::WOOD_DARK } else { idx::SHADOW }
+            } else if (26..42).contains(&y) {
+                // единая красная лента «КВАС»: белая штриховка сверху и снизу
+                // идёт непрерывно по всему прилавку (без вертикальных швов)
+                if y == 26 || y == 41 {
+                    idx::WHITE
+                } else if y == 27 || y == 40 {
                     if (x / 4) % 2 == 0 {
-                        idx::WHITE
+                        idx::PLASTER
                     } else {
-                        idx::RED
+                        idx::RED_DARK
+                    }
+                } else if (30..38).contains(&y) {
+                    // буквы-заглушки: светлые штрихи на красном
+                    let on = (x % 11 >= 2 && x % 11 <= 5) && (y == 33 || y == 34);
+                    if on {
+                        idx::PLASTER
+                    } else {
+                        noisy(&mut rng, idx::RED, idx::RED_DARK, 0.08)
                     }
                 } else {
                     noisy(&mut rng, idx::RED, idx::RED_DARK, 0.1)
                 }
-            } else if x % 16 == 0 {
-                // вертикальные доски фасада
-                idx::BLACK
+            } else if y >= 52 {
+                // цоколь — тёмное дерево до пола
+                if y == 52 {
+                    idx::WOOD_DARK
+                } else {
+                    noisy(&mut rng, idx::WOOD_DARK, idx::SHADOW, 0.1)
+                }
             } else {
-                noisy(&mut rng, idx::WOOD_LIGHT, idx::WOOD_DARK, 0.1)
+                // фасад: сплошные доски, шов мягкий и редкий — прилавок один
+                let seam = x % 21 == 20;
+                if seam {
+                    idx::WOOD_DARK
+                } else if (y % 7 == 0) {
+                    idx::WOOD_DARK
+                } else {
+                    noisy(&mut rng, idx::WOOD_LIGHT, idx::WOOD_DARK, 0.1)
+                }
             };
             px(t, x, y, c);
         }

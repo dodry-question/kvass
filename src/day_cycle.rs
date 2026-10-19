@@ -61,8 +61,8 @@ impl Default for GameState {
             phase: Phase::Menu,
             fine: 0,
             fine_reason: String::new(),
-            spawn_t: 8.0,
-            spawn_interval: 14.0,
+            spawn_t: 10.0,
+            spawn_interval: 22.0,
             msg: String::new(),
             msg_t: 0.0,
             day_passed: false,
@@ -162,7 +162,7 @@ pub fn phase_system(
             if keys.just_pressed(KeyCode::Enter) {
                 state.phase = Phase::Playing;
                 state.time_left = day_len(state.day);
-                state.spawn_t = 6.0;
+                state.spawn_t = 10.0;
                 state.fine = 0;
                 state.fine_reason.clear();
                 // сброс мира: бочки, покупатели, грязь
@@ -189,7 +189,9 @@ pub fn phase_system(
                 state.norm = norm_for(state.day);
                 state.day_earned = 0;
                 state.phase = Phase::Shopping;
-                state.spawn_interval = (14.0 - state.day as f32 * 2.0).max(6.0);
+                // Поток покупателей щадящий: в день 1 один человек за раз,
+                // дальше чуть плотнее, но без очереди в три ряда.
+                state.spawn_interval = (22.0 - state.day as f32 * 2.5).max(11.0);
                 let d = state.day;
                 let n = state.norm;
                 state.notify(format!("ДЕНЬ {}. НОРМА {} К. ЗАКУПИТЕ СЫРЬЁ.", d, n));

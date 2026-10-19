@@ -10,8 +10,8 @@ use crate::inventory::Inventory;
 use crate::sprites::{NpcKind, Vessel};
 
 pub const SPEED: f32 = 1.6;
-const ENTER_TIME: f32 = 70.0;
-const QUEUE_TIME: f32 = 50.0;
+const ENTER_TIME: f32 = 95.0;
+const QUEUE_TIME: f32 = 78.0;
 const BUBBLE_TIME: f32 = 5.0;
 
 /// Точки очереди строго перед прилавком (северная сторона).

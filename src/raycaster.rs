@@ -161,9 +161,13 @@ impl Renderer {
             // «сжатие» объектов вблизи: они переставали расти).
             let perp_d = perp.max(0.2);
             let full_h = (SCREEN_H as f32 / perp_d) as i32;
-            // прилавок — низкая стена до пола, за ней виден дальняя стена и покупатели
+            // прилавок — низкая стена до пола, за ней виден дальняя стена и
+            // покупатели. Кромка должна идти заметно ниже горизонта (а не
+            // практически на нём, как было при 0.48 — тогда людей резало
+            // ровно посередине экрана). 0.40: видно от колен вверх, и человек
+            // читается как стоящий за прилавком, а не «на» нём.
             let wall_h = if hit_tile == Tile::Counter {
-                (full_h as f32 * 0.48) as i32
+                (full_h as f32 * 0.40) as i32
             } else {
                 full_h
             };
@@ -301,8 +305,12 @@ impl Renderer {
             let sprite_h = ((SCREEN_H as f32 / ty * SPRITE_SCALE).max(1.0)) as usize;
             let sprite_w = sprite_h / 2; // 32x64
             let feet = HORIZON as f32 + (0.5 * SCREEN_H as f32) / ty;
+            // Клампим только диапазон отрисовки, а НЕ начало спрайта:
+            // иначе у близко стоящего человека (голова выше кадра) текстура
+            // растягивалась по обрезанному ящику и он «обрезался» посередине.
+            let y0_raw = feet - sprite_h as f32;
+            let y0 = y0_raw.max(0.0) as i32;
             let y1 = feet.min(SCREEN_H as f32) as i32;
-            let y0 = (feet - sprite_h as f32).max(0.0) as i32;
             let x0 = (screen_x - sprite_w as i32 / 2).max(0);
             let x1 = (screen_x + sprite_w as i32 / 2).min(SCREEN_W as i32);
             let data = sheet.npc_sprite(*kind);
@@ -327,8 +335,12 @@ impl Renderer {
                     if occluded && y >= ztop {
                         continue;
                     }
-                    let tex_y = ((y - y0) * crate::sprites::SPR_H as i32 / sprite_h.max(1) as i32)
-                        .min(crate::sprites::SPR_H as i32 - 1) as usize;
+                    // берём строку текстуры по НЕклампированной верхней точке —
+                    // обрезка экрана не должна смещать начало текстуры
+                    let tex_y = (((y as f32 - y0_raw) * crate::sprites::SPR_H as f32
+                        / sprite_h.max(1) as f32)
+                        .clamp(0.0, (crate::sprites::SPR_H - 1) as f32))
+                        as usize;
                     let c = data[tex_y * crate::sprites::SPR_W + tex_x];
                     if c == crate::sprites::TRANSPARENT {
                         continue;

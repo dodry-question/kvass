@@ -129,6 +129,7 @@ fn main() {
                     enemies::hooligan_behavior.run_if(in_play),
                     interact::interact,
                     interact::fill_hold,
+                    interact::brew_qte,
                     audio::ambience,
                     audio::bubble_volume,
                     audio::footsteps,
@@ -191,6 +192,7 @@ fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
     commands.insert_resource(GameState::default());
     commands.insert_resource(day_cycle::Dirty::default());
     commands.insert_resource(interact::FillState::default());
+    commands.insert_resource(brewing::BrewQte::default());
     commands.insert_resource(GameRng(StdRng::seed_from_u64(777)));
     commands.insert_resource(World {
         textures: Textures::generate(),
@@ -244,6 +246,7 @@ fn render_frame(
     state: Res<GameState>,
     inv: Res<Inventory>,
     barrels: Res<Barrels>,
+    qte: Res<brewing::BrewQte>,
     customers: Query<&Customer>,
     mut world: ResMut<World>,
     mut images: ResMut<Assets<Image>>,
@@ -283,7 +286,7 @@ fn render_frame(
         let World {
             renderer, font, ..
         } = &mut *world;
-        ui::draw_frame(renderer, font, &state, &inv, &barrels, &view, t, &cam, &map);
+        ui::draw_frame(renderer, font, &state, &inv, &barrels, &qte, &view, t, &cam, &map);
         renderer.present();
         let rgba = renderer.rgba.clone();
         if let Some(mut img) = images.get_mut(&handle.0) {

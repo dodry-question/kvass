@@ -1,7 +1,7 @@
 //! HUD (Doom-статусбар), облачка диалогов, экраны меню — всё рисуется
 //! прямо в палитровом буфере 320x200.
 
-use crate::brewing::{ferment_progress, BarrelPhase, BarrelSignal, Barrels};
+use crate::brewing::{BarrelPhase, BarrelSignal, Barrels, BrewQte};
 use crate::customer::Customer;
 use crate::day_cycle::{GameState, Phase};
 use crate::font::{frame_rect, put, rect, Font};
@@ -18,6 +18,7 @@ pub fn draw_frame(
     state: &GameState,
     inv: &Inventory,
     barrels: &Barrels,
+    qte: &crate::brewing::BrewQte,
     customers: &CustomerView<'_>,
     t: f32,
     cam: &GameCam,
@@ -30,13 +31,13 @@ pub fn draw_frame(
         Phase::Final => draw_final(&mut renderer.indices, font, t),
         Phase::Tutorial => {
             let bubbles = bubble_layout(customers, font, cam);
-            draw_hud(&mut renderer.indices, font, state, inv, barrels, t, map, cam, &bubbles);
+            draw_hud(&mut renderer.indices, font, state, inv, barrels, qte, t, map, cam, &bubbles);
             draw_bubbles(&mut renderer.indices, font, &bubbles);
             draw_tutorial(&mut renderer.indices, font, state, customers, cam, t);
         }
         Phase::Playing => {
             let bubbles = bubble_layout(customers, font, cam);
-            draw_hud(&mut renderer.indices, font, state, inv, barrels, t, map, cam, &bubbles);
+            draw_hud(&mut renderer.indices, font, state, inv, barrels, qte, t, map, cam, &bubbles);
             draw_bubbles(&mut renderer.indices, font, &bubbles);
         }
     }
@@ -89,8 +90,9 @@ fn bubble_layout(view: &CustomerView<'_>, font: &Font, cam: &GameCam) -> Vec<Bub
             continue;
         }
         let screen_x = ((UI_W as f32 / 2.0) * (1.0 + tx / ty)) as i32;
-        // верх головы — как у спрайта в рендере (масштаб 1.2, кламп как в raycaster)
-        let sprite_h = (UI_H as f32 / ty * 1.2).min(160.0) as i32;
+        // верх головы — как у спрайта в рендере (масштаб 1.2, без клампа —
+        // иначе у близко стоящего человека пузырь съезжал бы вниз)
+        let sprite_h = (UI_H as f32 / ty * 1.2) as i32;
         let feet = UI_HORIZON + (0.5 * UI_H as f32 / ty) as i32;
         let top = feet - sprite_h;
         // перенос текста на 2 строки
@@ -151,6 +153,7 @@ fn draw_hud(
     state: &GameState,
     inv: &Inventory,
     barrels: &Barrels,
+    qte: &BrewQte,
     t: f32,
     map: &crate::map::Map,
     cam: &GameCam,
@@ -172,19 +175,34 @@ fn draw_hud(
                 };
                 (idx::METAL_DARK, s)
             }
-            BarrelPhase::Ferment(_) => {
-                let p = (ferment_progress(b).unwrap_or(0.0) * 100.0) as i32;
-                (idx::KVASS_MID, format!("Б{} БРОДИТ {}%", i + 1, p))
-            }
-            BarrelPhase::Ready(sec) => {
+            BarrelPhase::Ferment(p) => (idx::KVASS_MID, format!("Б{} БРОДИТ {}%", i + 1, p as i32)),
+            BarrelPhase::Ready(p) => {
                 let pulse = if (t * 4.0) as i32 % 2 == 0 { true } else { false };
                 let bg = if pulse { idx::GREEN } else { idx::KVASS_LIGHT };
-                (bg, format!("Б{} ГОТОВА {}/20 {:.0}", i + 1, b.portions, sec))
+                (
+                    bg,
+                    format!(
+                        "Б{} ГОТОВА {}% {}/{} {:.0}",
+                        i + 1,
+                        p as i32,
+                        b.portions,
+                        crate::brewing::BARREL_PORTIONS,
+                        crate::brewing::seconds_to_next(b)
+                    ),
+                )
             }
-            BarrelPhase::Overripe(sec) => {
+            BarrelPhase::Overripe(p) => {
                 let pulse = (t * 6.0) as i32 % 2 == 0;
                 let bg = if pulse { idx::RED } else { idx::RED_DARK };
-                (bg, format!("Б{} ПЕРЕБРОД {:.0}!", i + 1, sec))
+                (
+                    bg,
+                    format!(
+                        "Б{} ПЕРЕБРОД {}% {:.0}!",
+                        i + 1,
+                        p as i32,
+                        crate::brewing::seconds_to_next(b)
+                    ),
+                )
             }
             BarrelPhase::Ruined => (idx::BLACK, format!("Б{} ГРЯЗЬ! МОЙТЕ", i + 1)),
         };
@@ -205,8 +223,8 @@ fn draw_hud(
             if bg == idx::BLACK { idx::RED } else { idx::WHITE },
             Some(idx::BLACK),
         );
-        // мигание иконки при AlmostReady / переброде
-        if matches!(b.phase, BarrelPhase::Ferment(tt) if tt <= 10.0) && (t * 6.0) as i32 % 2 == 0
+        // мигание иконки при AlmostReady (последние 10%) / переброде
+        if matches!(b.phase, BarrelPhase::Ferment(tt) if tt >= 90.0) && (t * 6.0) as i32 % 2 == 0
         {
             frame_rect(buf, SCREEN_W, SCREEN_H, x - 1, y - 1, w + 2, 15, idx::LAMP);
         }
@@ -406,7 +424,15 @@ fn draw_hud(
             Tile::Sugar => Some("САХАР С ИЗЮМОМ - НАЖМИТЕ E"),
             Tile::Water => Some("КОЛОНКА С ВОДОЙ - НАЖМИТЕ E"),
             Tile::Shelf => Some("ПУСТАЯ ПОСУДА - НАЖМИТЕ E"),
-            Tile::Barrel => Some("БОЧКА: E - РЕЦЕПТ, ДЕРЖИТЕ E - РОЗЛИВ"),
+            Tile::Barrel => {
+                // бочка бродит/готова — можно подсказать ускорение
+                let k = (fx.floor() as i32, fy.floor() as i32);
+                if !qte.active && barrels.map.get(&k).map(|b| b.boostable()).unwrap_or(false) {
+                    Some("БОЧКА: ПРОБЕЛ - УСКОРИТЬ БРОЖЕНИЕ")
+                } else {
+                    Some("БОЧКА: E - РЕЦЕПТ, ДЕРЖИТЕ E - РОЗЛИВ")
+                }
+            }
             Tile::Counter => Some("ПРИЛАВОК: E - ОТДАТЬ ПОКУПАТЕЛЮ"),
             Tile::Doorway => Some("ДВЕРЬ НА УЛИЦУ"),
             _ => None,
@@ -430,6 +456,89 @@ fn draw_hud(
                 Some(idx::BLACK),
             );
         }
+    }
+
+    // --- Мини-игра ускорения брожения: полоска с зоной и бегунком ---
+    if qte.active {
+        draw_qte(buf, font, qte, barrels, t);
+    }
+}
+
+/// Полоска ускорения брожения (снизу, над строкой уведомлений).
+///
+/// По полоске бегает бегунок, маленький участок подсвечен — туда нужно
+/// попасть ПРОБЕЛОМ: +10% к брожению. Перебор (125%/150%) портит квас.
+fn draw_qte(
+    buf: &mut [u8],
+    font: &Font,
+    qte: &BrewQte,
+    barrels: &Barrels,
+    t: f32,
+) {
+    const W: i32 = 210;
+    const X: i32 = (UI_W - W) / 2;
+    const Y: i32 = BAR_Y - 40;
+    const H: i32 = 27;
+
+    // панель
+    rect(buf, SCREEN_W, SCREEN_H, X, Y, W, H, idx::SHADOW);
+    frame_rect(buf, SCREEN_W, SCREEN_H, X, Y, W, H, idx::WOOD_DARK);
+
+    // подпись: масштаб подбирается автоматически, чтобы не вылезало
+    let title = format!(
+        "БРОДИТ {}% — ПРОБЕЛ В ЗОНУ (+{}%)",
+        qte.barrel
+            .and_then(|k| barrels.map.get(&k))
+            .map(|b| match b.phase {
+                BarrelPhase::Ferment(p) => p as i32,
+                BarrelPhase::Ready(p) => p as i32,
+                BarrelPhase::Overripe(p) => p as i32,
+                _ => 0,
+            })
+            .unwrap_or(0),
+        crate::brewing::QTE_BONUS as i32
+    );
+    font.draw_fit(
+        buf,
+        SCREEN_W,
+        SCREEN_H,
+        X + 4,
+        Y + 3,
+        (W - 8),
+        &title,
+        idx::LAMP,
+        Some(idx::BLACK),
+        1,
+    );
+
+    // полоска
+    const BX: i32 = X + 5;
+    const BW: i32 = W - 10;
+    const BY: i32 = Y + 15;
+    const BH: i32 = 8;
+    rect(buf, SCREEN_W, SCREEN_H, BX, BY, BW, BH, idx::METAL_DARK);
+    // подсвеченная зона
+    let z0 = BX + (BW as f32 * qte.zone0) as i32;
+    let z1 = BX + (BW as f32 * qte.zone1) as i32;
+    let zone_c = if qte.flash > 0.0 { idx::GREEN } else { idx::KVASS_LIGHT };
+    rect(buf, SCREEN_W, SCREEN_H, z0, BY, (z1 - z0).max(1), BH, zone_c);
+    // бегунок
+    let rx = BX + (BW as f32 * qte.pos) as i32;
+    rect(buf, SCREEN_W, SCREEN_H, rx - 1, BY - 1, 3, BH + 2, idx::LAMP);
+    frame_rect(buf, SCREEN_W, SCREEN_H, BX - 1, BY - 1, BW + 2, BH + 2, idx::BLACK);
+
+    // обратная связь по попаданию/промаху (мигает)
+    if qte.flash.abs() > 0.05 {
+        let (text, col) = if qte.flash > 0.0 {
+            (format!("+{}%", crate::brewing::QTE_BONUS as i32), idx::GREEN)
+        } else {
+            ("МИМО!".into(), idx::RED)
+        };
+        let w = font.width(&text) as i32 + 8;
+        let x = ((UI_W - w) / 2).max(2);
+        rect(buf, SCREEN_W, SCREEN_H, x, Y - 13, w, 12, idx::SHADOW);
+        frame_rect(buf, SCREEN_W, SCREEN_H, x, Y - 13, w, 12, col);
+        font.draw(buf, SCREEN_W, SCREEN_H, x + 4, Y - 11, &text, col, Some(idx::BLACK));
     }
 }
 
