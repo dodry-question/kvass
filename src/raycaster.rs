@@ -336,15 +336,25 @@ impl Renderer {
             let y0_raw = feet - sprite_h as f32;
             let y0 = y0_raw.max(0.0) as i32;
             let y1 = feet.min(SCREEN_H as f32) as i32;
-            let x0 = (screen_x - sprite_w as i32 / 2).max(0);
+            // необрезанная левая граница коробки — ОПОРА для tex_x (всегда
+            // исходная, до .max(0): иначе у спрайта у края экрана текстура
+            // сжимается). Раньше здесь была ошибка: опорой брался
+            // screen_x - sprite_w вместо screen_x - sprite_w/2 — сдвиг на
+            // полкоробки давал сэмпл текстуры с середины: левая половина
+            // тела не читалась вовсе, справа тянулась кромка (баг «половина
+            // спрайта», классика Lodev: tex_x = (x - draw_start_x) * W / w).
+            let x_left = screen_x - sprite_w as i32 / 2;
+            let x0 = x_left.max(0);
             let x1 = (screen_x + sprite_w as i32 / 2).min(SCREEN_W as i32);
             let data = sheet.npc_sprite(*kind);
             let bright = (1.0 - ty / MAX_DIST).max(0.1) * flicker;
             if std::env::var("KVASS_DEBUG_SPRITES").is_ok() {
                 let mid = ((x0 + x1) / 2).clamp(0, SCREEN_W as i32 - 1) as usize;
                 eprintln!(
-                    "sprite {} ty={ty:.2} sx={screen_x} box=({x0},{y0})-({x1},{y1}) ztop={} zbuf={:.2}",
+                    "sprite {} ty={ty:.2} screen_x={screen_x} start_x={x0} end_x={x1} width={} \
+                     box_y=({y0})-({y1}) sprite_h={sprite_h} ztop={} zbuf={:.2}",
                     kind.name(),
+                    x1 - x0,
                     self.ztop[mid],
                     self.zbuf[mid],
                 );
@@ -353,9 +363,9 @@ impl Renderer {
                 // стена ближе спрайта — видна только её верхняя часть (над прилавком)
                 let occluded = self.zbuf[x as usize] < ty;
                 let ztop = self.ztop[x as usize];
-                let tex_x = ((x - (screen_x - sprite_w as i32)) * crate::sprites::SPR_W as i32
+                let tex_x = ((x - x_left) * crate::sprites::SPR_W as i32
                     / sprite_w.max(1) as i32)
-                    .min(crate::sprites::SPR_W as i32 - 1) as usize;
+                    .clamp(0, crate::sprites::SPR_W as i32 - 1) as usize;
                 for y in y0..y1 {
                     if occluded && y >= ztop {
                         continue;
