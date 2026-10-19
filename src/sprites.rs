@@ -178,6 +178,23 @@ fn person(kind: NpcKind) -> Vec<u8> {
         put(&mut s, w, x, 13, idx::BLACK);
     }
 
+    // объём: дизеринг-тень на правом боку торса и на левой ноге
+    for y in 18..38 {
+        if y % 2 == 0 {
+            put(&mut s, w, 22, y, idx::SHADOW);
+        }
+    }
+    for y in 40..58 {
+        put(&mut s, w, 9, y, idx::SHADOW);
+    }
+
+    // морщинистое лицо: глаза-точки шире, нос
+    put(&mut s, w, 12, 9, idx::BLACK);
+    put(&mut s, w, 19, 9, idx::BLACK);
+    put(&mut s, w, 15, 11, idx::RED_DARK); // нос
+    put(&mut s, w, 11, 11, idx::RED_DARK); // морщинки у глаз
+    put(&mut s, w, 20, 11, idx::RED_DARK);
+
     // головные уборы и волосы
     match kind {
         NpcKind::Grandma => {
@@ -194,6 +211,21 @@ fn person(kind: NpcKind) -> Vec<u8> {
                 put(&mut s, w, 21, y, idx::RED_DARK);
                 put(&mut s, w, 22, y, idx::RED);
             }
+            // фартук поверх юбки
+            for y in 33..47 {
+                for x in 11..21 {
+                    let c = if x == 20 || (x + y) % 5 == 0 {
+                        idx::TILE_DARK
+                    } else {
+                        idx::PLASTER
+                    };
+                    put(&mut s, w, x, y, c);
+                }
+            }
+            // узелок платка на груди
+            put(&mut s, w, 12, 23, idx::RED_DARK);
+            put(&mut s, w, 13, 23, idx::RED_DARK);
+            put(&mut s, w, 12, 24, idx::RED_DARK);
         }
         NpcKind::Mama => {
             // шляпка с цветком
@@ -249,44 +281,254 @@ pub fn vessel_icon(kind: Vessel, filled: bool) -> Vec<u8> {
     let w = 16;
     match kind {
         Vessel::Glass => {
-            block(&mut s, w, 3, 2, 10, 13, if filled { idx::KVASS_MID } else { idx::METAL });
+            // гранёный стакан: сплошное стекло/квас, две тонкие грани, блик
+            for y in 2..15 {
+                let inset = if y > 12 { 1 } else { 0 };
+                for x in (3 + inset)..(13 - inset) {
+                    let c = if filled {
+                        if y <= 4 {
+                            idx::KVASS_LIGHT
+                        } else {
+                            idx::KVASS_MID
+                        }
+                    } else {
+                        idx::TILE
+                    };
+                    put(&mut s, w, x, y, c);
+                }
+            }
+            // грани — тонкие тёмные линии (чтобы читался «гранёный»)
+            for y in 5..14 {
+                put(
+                    &mut s,
+                    w,
+                    6,
+                    y,
+                    if filled { idx::KVASS_DARK } else { idx::TILE_DARK },
+                );
+                put(
+                    &mut s,
+                    w,
+                    10,
+                    y,
+                    if filled { idx::KVASS_DARK } else { idx::TILE_DARK },
+                );
+            }
+            // блик слева
+            for y in 5..13 {
+                put(
+                    &mut s,
+                    w,
+                    4,
+                    y,
+                    if filled { idx::KVASS_LIGHT } else { idx::WHITE },
+                );
+            }
+            // ободок и дно
+            for x in 3..13 {
+                put(
+                    &mut s,
+                    w,
+                    x,
+                    2,
+                    if filled { idx::KVASS_LIGHT } else { idx::WHITE },
+                );
+                put(&mut s, w, x, 15, idx::TILE_DARK);
+            }
+        }
+        Vessel::Jar => {
+            // пузатая банка: узкое горлышко с рельефом, широкое тело
+            block(&mut s, w, 5, 1, 6, 3, idx::TILE); // горлышко
+            put(&mut s, w, 6, 2, idx::WHITE); // рельеф-блик
+            put(&mut s, w, 9, 2, idx::TILE_DARK);
+            for y in 4..15 {
+                let (x0, x1) = match y {
+                    4 => (4, 12),
+                    5 => (3, 13),
+                    6..=12 => (2, 14),
+                    _ => (3, 13),
+                };
+                for x in x0..x1 {
+                    let c = if filled && y >= 5 {
+                        idx::KVASS_MID
+                    } else {
+                        idx::TILE
+                    };
+                    put(&mut s, w, x, y, c);
+                }
+            }
+            // крышка металлическая
+            for x in 4..12 {
+                put(&mut s, w, x, 0, idx::METAL);
+            }
             if filled {
-                for y in 3..6 {
+                for y in 5..8 {
                     for x in 4..12 {
                         put(&mut s, w, x, y, idx::KVASS_LIGHT);
                     }
                 }
-            }
-            // граны
-            put(&mut s, w, 6, 6, if filled { idx::KVASS_DARK } else { idx::METAL_DARK });
-            put(&mut s, w, 10, 6, if filled { idx::KVASS_DARK } else { idx::METAL_DARK });
-        }
-        Vessel::Jar => {
-            block(&mut s, w, 3, 3, 10, 12, if filled { idx::KVASS_MID } else { idx::METAL });
-            // крышка
-            for x in 2..14 {
-                put(&mut s, w, x, 1, idx::METAL);
-                put(&mut s, w, x, 2, idx::METAL_DARK);
-            }
-            if filled {
-                for y in 4..7 {
-                    for x in 4..12 {
-                        put(&mut s, w, x, y, idx::KVASS_LIGHT);
-                    }
+                put(&mut s, w, 3, 8, idx::KVASS_DARK);
+                put(&mut s, w, 12, 9, idx::KVASS_DARK);
+            } else {
+                for (x, y) in [(4, 8), (11, 10), (5, 12)] {
+                    put(&mut s, w, x, y, idx::WHITE);
                 }
             }
         }
         Vessel::Bottle => {
+            // пробка
+            block(&mut s, w, 6, 0, 4, 3, idx::WOOD_LIGHT);
             // горлышко
-            block(&mut s, w, 6, 1, 4, 5, idx::BOTTLE_GLASS);
-            // тело
-            block(&mut s, w, 4, 6, 8, 9, if filled { idx::KVASS_DARK } else { idx::BOTTLE_GLASS });
+            block(&mut s, w, 6, 3, 4, 3, idx::BOTTLE_GLASS);
+            // тело (плечи расширяются)
+            for y in 6..15 {
+                let (x0, x1) = match y {
+                    6 => (5, 11),
+                    7 => (4, 12),
+                    _ => (4, 12),
+                };
+                for x in x0..x1 {
+                    let c = if filled {
+                        idx::KVASS_DARK
+                    } else {
+                        idx::BOTTLE_GLASS
+                    };
+                    put(&mut s, w, x, y, c);
+                }
+            }
+            // блик стекла
+            put(&mut s, w, 5, 8, idx::TILE);
+            put(&mut s, w, 5, 9, idx::TILE);
             // этикетка
-            for y in 9..12 {
-                for x in 5..11 {
+            for y in 9..13 {
+                for x in 6..11 {
                     put(&mut s, w, x, y, idx::PLASTER);
                 }
             }
+            for x in 6..11 {
+                put(&mut s, w, x, 10, if filled { idx::RED } else { idx::RED_DARK });
+            }
+        }
+    }
+    s
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PropIcon {
+    /// Горсть сухарей: мешковина с кусочками хлеба.
+    Croutons,
+    /// Сахар с изюмом: бумажный пакет.
+    Sugar,
+    /// Ведро воды: металлическое с дужкой.
+    Bucket,
+}
+
+/// Иконки предметов 16×16 (склад, слоты, руки). 255 = прозрачный.
+pub fn prop_icon(k: PropIcon) -> Vec<u8> {
+    let mut s = vec![TRANSPARENT; 16 * 16];
+    let w = 16;
+    let wood = idx::WOOD_LIGHT;
+    let wood_d = idx::WOOD_DARK;
+    match k {
+        PropIcon::Croutons => {
+            // кусочки бородинского в горлышке
+            for (x, y, c) in [
+                (5, 2, idx::KVASS_DARK),
+                (7, 1, idx::KVASS_MID),
+                (9, 2, idx::KVASS_DARK),
+                (6, 3, idx::KVASS_DARK),
+                (8, 3, idx::KVASS_MID),
+                (10, 3, idx::KVASS_MID),
+            ] {
+                put(&mut s, w, x, y, c);
+            }
+            // завязка горлышка
+            block(&mut s, w, 4, 4, 8, 3, idx::WOOD_DARK);
+            // корпус мешка с плетением
+            for y in 7..15 {
+                let (x0, x1) = if y == 7 || y == 14 {
+                    (3, 13)
+                } else {
+                    (2, 14)
+                };
+                for x in x0..x1 {
+                    let weave = if (x + y) % 2 == 0 { wood } else { wood_d };
+                    put(&mut s, w, x, y, weave);
+                }
+                // чёрная окантовка силуэта
+                put(&mut s, w, x0 - 1, y, idx::BLACK);
+                put(&mut s, w, x1, y, idx::BLACK);
+            }
+            // складка-блик
+            put(&mut s, w, 4, 8, idx::PLASTER);
+            put(&mut s, w, 4, 9, wood);
+        }
+        PropIcon::Sugar => {
+            // бумажный пакет, расширяется книзу
+            for y in 3..14 {
+                let spread = (y - 3) / 3;
+                let (x0, x1) = (5 - spread, 11 + spread);
+                for x in x0..=x1 {
+                    let c = if x == x0 + 1 && (x + y) % 3 == 0 {
+                        idx::TILE_DARK
+                    } else {
+                        idx::PLASTER
+                    };
+                    put(&mut s, w, x, y, c);
+                }
+            }
+            // сгиб верха
+            for x in 5..11 {
+                put(&mut s, w, x, 3, idx::TILE);
+                put(&mut s, w, x, 4, idx::TILE_DARK);
+            }
+            // крупинки сахара
+            for (x, y) in [(6, 7), (9, 8), (7, 10), (10, 10), (5, 11), (8, 12)] {
+                put(&mut s, w, x, y, idx::WHITE);
+            }
+            // изюм
+            for (x, y) in [(8, 7), (6, 9), (9, 11), (11, 9)] {
+                put(&mut s, w, x, y, idx::KVASS_DARK);
+            }
+            // надпись-штрих
+            for x in 5..9 {
+                put(&mut s, w, x, 13, idx::RED_DARK);
+            }
+        }
+        PropIcon::Bucket => {
+            // корпус ведра (трапеция)
+            for y in 6..14 {
+                let (x0, x1) = (5 - (y - 6) / 4, 10 + (y - 6) / 4);
+                for x in x0..=x1 {
+                    let c = if x == x1 {
+                        idx::METAL_DARK
+                    } else {
+                        idx::METAL
+                    };
+                    put(&mut s, w, x, y, c);
+                }
+            }
+            // обод
+            for x in 4..12 {
+                put(&mut s, w, x, 5, idx::PLASTER);
+            }
+            // дужка
+            for (x, y) in [
+                (4, 4),
+                (11, 4),
+                (4, 3),
+                (11, 3),
+                (5, 2),
+                (10, 2),
+                (6, 1),
+                (9, 1),
+                (7, 1),
+                (8, 1),
+            ] {
+                put(&mut s, w, x, y, idx::METAL_DARK);
+            }
+            put(&mut s, w, 5, 13, idx::METAL_DARK);
+            put(&mut s, w, 6, 14, idx::METAL_DARK);
         }
     }
     s

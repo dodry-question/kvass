@@ -1,4 +1,4 @@
-﻿//! Оффскрин-самотест: рисует кадры всех экранов в BMP-файлы и выходит.
+//! Оффскрин-самотест: рисует кадры всех экранов в BMP-файлы и выходит.
 //! Запуск: `cargo run -- --selftest`. Файлы в `selftest_out/`.
 //!
 //! Кадр = мир 640×400 (×2) + канвас UI 1280×800 поверх (альфа-композиция),
@@ -63,7 +63,7 @@ pub fn run() {
     canvas.clear();
     ui::draw_frame(
         &mut canvas, &font, &state, &empty_inv, &Barrels::from_map(&map),
-        &no_qte, &no_cust, 1.0, &cam, &map,
+        &no_qte, &no_cust, 1.0, &cam, &map, false,
     );
     snap(&canvas, None, "1_menu.bmp");
 
@@ -88,7 +88,7 @@ pub fn run() {
     canvas.clear();
     ui::draw_frame(
         &mut canvas, &font, &state, &inv, &Barrels::from_map(&map),
-        &no_qte, &no_cust, 2.0, &cam, &map,
+        &no_qte, &no_cust, 2.0, &cam, &map, false,
     );
     snap(&canvas, None, "2_shopping.bmp");
 
@@ -156,7 +156,7 @@ pub fn run() {
     renderer.present();
     let world_a = renderer.rgba.clone();
     canvas.clear();
-    ui::draw_frame(&mut canvas, &font, &state, &inv, &barrels, &no_qte, &custs, 3.5, &cam, &map);
+    ui::draw_frame(&mut canvas, &font, &state, &inv, &barrels, &no_qte, &custs, 3.5, &cam, &map, false);
     snap(&canvas, Some(&world_a), "3_playing.bmp");
 
     // --- 4. Итоги дня ---
@@ -174,7 +174,7 @@ pub fn run() {
     canvas.clear();
     ui::draw_frame(
         &mut canvas, &font, &state, &inv, &Barrels::from_map(&map),
-        &no_qte, &no_cust, 4.0, &cam, &map,
+        &no_qte, &no_cust, 4.0, &cam, &map, false,
     );
     snap(&canvas, None, "4_dayend.bmp");
 
@@ -186,7 +186,7 @@ pub fn run() {
     canvas.clear();
     ui::draw_frame(
         &mut canvas, &font, &state, &inv, &Barrels::from_map(&map),
-        &no_qte, &no_cust, 5.0, &cam, &map,
+        &no_qte, &no_cust, 5.0, &cam, &map, false,
     );
     snap(&canvas, None, "5_final.bmp");
 
@@ -241,7 +241,7 @@ pub fn run() {
     let world_b = renderer.rgba.clone();
     canvas.clear();
     ui::draw_frame(
-        &mut canvas, &font, &state, &inv, &barrels, &no_qte, &tut_cust, 1.5, &cam, &map,
+        &mut canvas, &font, &state, &inv, &barrels, &no_qte, &tut_cust, 1.5, &cam, &map, false,
     );
     snap(&canvas, Some(&world_b), "7_tutorial.bmp");
 
@@ -364,7 +364,7 @@ pub fn run() {
         &qte_cust,
         6.0,
         &cam,
-        &map,
+        &map, false,
     );
     snap(&canvas, Some(&world_c), "12_qte.bmp");
 
@@ -392,7 +392,7 @@ pub fn run() {
         &custs,
         3.5,
         &cam,
-        &map,
+        &map, false,
     );
     snap(&canvas, Some(&world_a), "13_pause.bmp");
 
@@ -429,7 +429,7 @@ pub fn run() {
         &no_cust,
         2.2,
         &cam,
-        &map,
+        &map, false,
     );
     snap(&canvas, Some(&world_c), "14_noposuda.bmp");
 

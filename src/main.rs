@@ -278,6 +278,7 @@ fn slot_select(keys: Res<ButtonInput<KeyCode>>, mut inv: ResMut<Inventory>) {
 
 fn render_frame(
     time: Res<Time>,
+    keys: Res<ButtonInput<KeyCode>>,
     map: Res<map::Map>,
     cam: Res<GameCam>,
     state: Res<GameState>,
@@ -321,6 +322,16 @@ fn render_frame(
             .collect();
         let World { font, .. } = &*world;
         ui_canvas.clear();
+        // движется ли игрок (для покачивания предмета в руках)
+        let moving = matches!(state.phase, Phase::Playing | Phase::Tutorial)
+            && keys.any_pressed([
+                KeyCode::KeyW,
+                KeyCode::KeyA,
+                KeyCode::KeyS,
+                KeyCode::KeyD,
+                KeyCode::ArrowUp,
+                KeyCode::ArrowDown,
+            ]);
         ui::draw_frame(
             &mut ui_canvas,
             font,
@@ -332,6 +343,7 @@ fn render_frame(
             t,
             &cam,
             &map,
+            moving,
         );
     }
 

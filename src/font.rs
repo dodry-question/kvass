@@ -255,13 +255,17 @@ impl Font {
 
             for &px in &want {
                 let mut map: HashMap<char, Glyph> = HashMap::new();
+                // Пиксельный рендер: растризуем в половинном кегле, квантуем
+                // тайл в чёрное/белое и увеличиваем ×2 — жёсткие крупные
+                // пиксели, читаемая кириллица, стиль DOS.
+                let spx = (px as f32 / 2.0).max(4.0);
                 // капс — верх «Н» над базовой линией
-                let (nm, _) = fnt.rasterize('Н', px as f32);
-                let cap = nm.ymin + nm.height as i32;
+                let (nm, _) = fnt.rasterize('Н', spx);
+                let cap = (nm.ymin + nm.height as i32) * 2;
                 let mut desc = 0i32;
                 for c in chars.clone() {
-                    let (m, bmp) = fnt.rasterize(c, px as f32);
-                    let adv = (m.advance_width.round() as i32).max(1);
+                    let (m, bmp) = fnt.rasterize(c, spx);
+                    let adv = ((m.advance_width * 2.0).round() as i32).max(2);
                     if c == ' ' || m.width == 0 || m.height == 0 {
                         map.insert(
                             c,
@@ -276,20 +280,30 @@ impl Font {
                         );
                         continue;
                     }
-                    desc = desc.max(-(m.ymin));
-                    let mut cov = vec![0u8; bmp.len()];
-                    for (o, v) in cov.iter_mut().zip(bmp.iter()) {
-                        // слабый шлейф сглаживания в ноль — фон остаётся чистым
-                        *o = if *v < 26 { 0 } else { *v };
+                    desc = desc.max(-(m.ymin) * 2);
+                    let w2 = m.width as usize * 2;
+                    let h2 = m.height as usize * 2;
+                    let mut cov = vec![0u8; w2 * h2];
+                    for sy in 0..m.height as usize {
+                        for sx in 0..m.width as usize {
+                            let v = bmp[sy * m.width + sx];
+                            if v >= 64 {
+                                for dy in 0..2 {
+                                    for dx in 0..2 {
+                                        cov[(sy * 2 + dy) * w2 + sx * 2 + dx] = 255;
+                                    }
+                                }
+                            }
+                        }
                     }
                     map.insert(
                         c,
                         Glyph {
                             adv,
-                            xmin: m.xmin,
-                            ymin: m.ymin,
-                            w: m.width as usize,
-                            h: m.height as usize,
+                            xmin: m.xmin * 2,
+                            ymin: m.ymin * 2,
+                            w: w2,
+                            h: h2,
                             cov,
                         },
                     );

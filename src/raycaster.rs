@@ -167,14 +167,14 @@ impl Renderer {
             // ровно посередине экрана). 0.40: видно от колен вверх, и человек
             // читается как стоящий за прилавком, а не «на» нём.
             let wall_h = if hit_tile == Tile::Counter {
-                (full_h as f32 * 0.40) as i32
+                (full_h as f32 * 0.34) as i32
             } else {
                 full_h
             };
             let end_raw = HORIZON + full_h / 2;
             let start_raw = end_raw - wall_h;
             let end = end_raw.min(SCREEN_H as i32);
-            let start = start_raw.max(0);
+            let start = start_raw.max(0).min(SCREEN_H as i32);
             // Спрайты: над высокой стеной НИЧЕГО не видно (раньше головы
             // покупателей из-за масштаба 1.2 торчали над стенами); у прилавка —
             // видно то, что выступает над его низким торцом.

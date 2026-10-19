@@ -14,7 +14,7 @@ use crate::inventory::{HandItem, Inventory};
 use crate::map::{Map, Tile};
 use crate::palette::PALETTE;
 use crate::raycaster::{GameCam, HORIZON, SCREEN_H};
-use crate::sprites::{Vessel, TRANSPARENT, vessel_icon};
+use crate::sprites::{PropIcon, Vessel, TRANSPARENT, prop_icon, vessel_icon};
 
 use bevy::prelude::Vec2;
 
@@ -71,6 +71,7 @@ pub fn draw_frame(
     t: f32,
     cam: &GameCam,
     map: &Map,
+    moving: bool,
 ) {
     match state.phase {
         Phase::Menu => draw_menu(canvas, font, t),
@@ -86,6 +87,9 @@ pub fn draw_frame(
         Phase::Playing | Phase::Tutorial => {
             let bubbles = bubble_layout(customers, font, cam);
             draw_hud(canvas, font, state, inv, barrels, qte, t, map, cam, &bubbles);
+            if !qte.active {
+                draw_viewmodel(canvas, inv, t, moving);
+            }
             draw_bubbles(canvas, font, &bubbles);
             if state.phase == Phase::Tutorial {
                 draw_tutorial(canvas, font, state, customers, cam, t);
@@ -96,31 +100,61 @@ pub fn draw_frame(
 
 // =================== Панели и утилиты ===================
 
-/// Тёмная эмалевая табличка с заклёпками по углам.
+/// Тёмная эмалевая табличка: жёсткая чёрная обводка, скошенные углы,
+/// пиксельная тень — стиль DOS-меню, никаких «веб-плашек».
 fn panel(c: &mut Canvas, x: i32, y: i32, w: i32, h: i32) {
-    c.rect(x + 4, y + 4, w, h, [0, 0, 0], 90);
-    c.rect(x, y, w, h, col::SHAD, 248);
-    c.rect(x, y, w, 2, col::WHITE, 50);
-    c.rect(x, y + h - 2, w, 2, [0, 0, 0], 110);
-    c.rect(x, y, 2, h, col::WHITE, 30);
-    c.rect(x + w - 2, y, 2, h, [0, 0, 0], 60);
-    for (rx, ry) in [
-        (x + 6, y + 6),
-        (x + w - 9, y + 6),
-        (x + 6, y + h - 9),
-        (x + w - 9, y + h - 9),
+    // жёсткая пиксельная тень со смещением
+    c.rect(x + 5, y + 6, w, h, [0, 0, 0], 190);
+    // доска
+    c.rect(x, y, w, h, col::SHAD, 255);
+    // толстая чёрная обводка (2px)
+    c.frame(x, y, w, h, [0, 0, 0], 255);
+    c.frame(x + 1, y + 1, w - 2, h - 2, [0, 0, 0], 255);
+    // скос: светлая грань сверху/слева, тёмная снизу/справа
+    c.rect(x + 2, y + 2, w - 4, 2, col::TILE, 130);
+    c.rect(x + 2, y + 2, 2, h - 4, col::TILE, 100);
+    c.rect(x + 2, y + h - 4, w - 4, 2, [0, 0, 0], 170);
+    c.rect(x + w - 4, y + 2, 2, h - 4, [0, 0, 0], 170);
+    // срубленные пиксельные углы
+    for (cx0, cy0, dxy) in [
+        (x, y, 0i32),
+        (x + w - 3, y, 1),
+        (x, y + h - 3, 2),
+        (x + w - 3, y + h - 3, 3),
     ] {
-        c.rect(rx, ry, 3, 3, col::METAL, 220);
+        let _ = dxy;
+        for i in 0..2 {
+            c.blend(cx0 + i, cy0, [0, 0, 0], 255);
+            c.blend(cx0, cy0 + i, [0, 0, 0], 255);
+        }
+    }
+    // заклёпки
+    for (rx, ry) in [
+        (x + 8, y + 8),
+        (x + w - 12, y + 8),
+        (x + 8, y + h - 12),
+        (x + w - 12, y + h - 12),
+    ] {
+        c.rect(rx, ry, 4, 4, col::METAL, 255);
+        c.blend(rx + 1, ry + 1, col::WHITE, 120);
+        c.blend(rx + 3, ry + 3, [0, 0, 0], 140);
     }
 }
 
-/// Красная лента-вывеска.
+/// Красная лента-вывеска в том же ретро-стиле.
 fn red_plate(c: &mut Canvas, x: i32, y: i32, w: i32, h: i32) {
-    c.rect(x + 4, y + 4, w, h, [0, 0, 0], 110);
+    c.rect(x + 5, y + 6, w, h, [0, 0, 0], 190);
     c.rect(x, y, w, h, col::RED, 255);
-    c.rect(x, y, w, 2, col::WHITE, 60);
-    c.rect(x, y + h - 2, w, 2, col::RED_D, 255);
-    c.frame(x, y, w, h, col::BLACK, 255);
+    c.frame(x, y, w, h, [0, 0, 0], 255);
+    c.frame(x + 1, y + 1, w - 2, h - 2, [0, 0, 0], 255);
+    for i in 0..2 {
+        c.blend(x + i, y, [0, 0, 0], 255);
+        c.blend(x, y + i, [0, 0, 0], 255);
+        c.blend(x + w - 1 - i, y + h - 1, [0, 0, 0], 255);
+        c.blend(x + w - 1, y + h - 1 - i, [0, 0, 0], 255);
+    }
+    c.rect(x + 2, y + 2, w - 4, 2, [255, 220, 220], 70);
+    c.rect(x + 2, y + h - 4, w - 4, 2, col::RED_D, 255);
 }
 
 /// Линейка прогресса.
@@ -165,6 +199,25 @@ fn blit_icon(c: &mut Canvas, icon: &[u8], x: i32, y: i32, scale: i32) {
     }
 }
 
+/// Спрайт предмета руки (для слотов, склада и рук от первого лица).
+fn item_icon(item: &HandItem) -> Vec<u8> {
+    match item {
+        HandItem::Croutons(_) => prop_icon(PropIcon::Croutons),
+        HandItem::Sugar(_) => prop_icon(PropIcon::Sugar),
+        HandItem::Bucket => prop_icon(PropIcon::Bucket),
+        HandItem::Empty(v, _) => vessel_icon(*v, false),
+        HandItem::Full(v, _, _) => vessel_icon(*v, true),
+    }
+}
+
+/// Количество единиц в предмете руки.
+fn item_count(item: &HandItem) -> u8 {
+    match item {
+        HandItem::Croutons(n) | HandItem::Sugar(n) | HandItem::Empty(_, n) => *n,
+        HandItem::Full(_, n, _) => *n,
+        HandItem::Bucket => 0,
+    }
+}
 /// Бумажный лист «квитанции».
 fn paper_panel(c: &mut Canvas, x: i32, y: i32, w: i32, h: i32) {
     c.rect(x + 6, y + 6, w, h, [0, 0, 0], 120);
@@ -273,13 +326,15 @@ fn draw_bubbles(c: &mut Canvas, font: &Font, bubbles: &[Bubble]) {
         c.rect(b.bx + 4, b.by + 4, b.w, b.h, [0, 0, 0], 110);
         c.rect(b.bx, b.by, b.w, b.h, col::WHITE, 250);
         c.frame(b.bx, b.by, b.w, b.h, col::BLACK, 255);
-        // хвостика вниз к голове
-        for dy in 0..8 {
-            let spread = 1 + dy / 3;
-            c.rect(b.screen_x - spread, b.by + b.h + dy, spread * 2, 2, col::WHITE, 250);
-            if dy < 7 {
-                c.rect(b.screen_x - spread, b.by + b.h + dy + 2, spread * 2, 1, col::BLACK, 255);
-            }
+        // пиксельная стрелка-хвостик вниз, строго к макушке покупателя
+        let tx = b.screen_x.clamp(b.bx + 12, b.bx + b.w - 12);
+        for dy in 0..12 {
+            let half = 5 - dy / 2; // сужается: 5 → 0
+            c.rect(tx - half - 1, b.by + b.h + dy, half * 2 + 3, 1, col::BLACK, 255);
+        }
+        for dy in 0..10 {
+            let half = 5 - dy / 2;
+            c.rect(tx - half, b.by + b.h + dy, half * 2 + 1, 1, col::WHITE, 250);
         }
         let mut ly = b.by + 10;
         for l in &b.lines {
@@ -430,40 +485,15 @@ fn draw_hud(
         let iy = y + 16;
         match &inv.hands[i] {
             None => {}
-            Some(item) => match item {
-                HandItem::Bucket => {
-                    // ведро: корпус, обод, дужка
-                    c.rect(x + 24, iy + 16, 40, 28, col::METAL, 255);
-                    c.frame(x + 24, iy + 16, 40, 28, col::INK, 255);
-                    c.rect(x + 22, iy + 12, 44, 6, col::METAL_D, 255);
-                    c.frame(x + 22, iy + 12, 44, 6, col::INK, 255);
-                    c.rect(x + 26, iy + 44, 36, 2, col::METAL_D, 255);
-                    // дужка
-                    for dx in [0, 1, 41, 42] {
-                        c.rect(x + 24 + dx, iy + 4, 2, 9, col::METAL_D, 255);
-                    }
-                    c.rect(x + 27, iy + 2, 34, 2, col::METAL_D, 255);
-                }
-                HandItem::Croutons(n) => {
-                    icon_croutons(c, x + 20, iy + 8);
-                    put_count(c, font, x, y, n);
-                }
-                HandItem::Sugar(n) => {
-                    icon_sugar(c, x + 28, iy + 4);
-                    put_count(c, font, x, y, n);
-                }
-                HandItem::Empty(v, n) => {
-                    blit_icon(c, &vessel_icon(*v, false), x + 20, iy, 3);
-                    put_count(c, font, x, y, n);
-                }
-                HandItem::Full(v, n, over) => {
-                    blit_icon(c, &vessel_icon(*v, true), x + 20, iy, 3);
-                    put_count(c, font, x, y, n);
-                    if *over && blink(t, 6.0) {
+            Some(item) => {
+                blit_icon(c, &item_icon(item), x + 20, iy, 3);
+                put_count(c, font, x, y, &item_count(item));
+                if let HandItem::Full(_, _, true) = item {
+                    if blink(t, 6.0) {
                         c.frame(x + 2, y + 2, 84, 84, col::RED, 255);
                     }
                 }
-            },
+            }
         }
     }
 
@@ -471,10 +501,10 @@ fn draw_hud(
     {
         let x = 712;
         font.draw(c, x, BAR_Y + 16, "СКЛАД", SZ_S, col::TILE, 255);
-        icon_croutons(c, x, BAR_Y + 48);
-        put_stock(c, font, x + 44, BAR_Y + 50, inv.stock_croutons);
-        icon_sugar(c, x + 96, BAR_Y + 44);
-        put_stock(c, font, x + 128, BAR_Y + 50, inv.stock_sugar);
+        blit_icon(c, &prop_icon(PropIcon::Croutons), x, BAR_Y + 46, 2);
+        put_stock(c, font, x + 40, BAR_Y + 52, inv.stock_croutons);
+        blit_icon(c, &prop_icon(PropIcon::Sugar), x + 92, BAR_Y + 46, 2);
+        put_stock(c, font, x + 126, BAR_Y + 52, inv.stock_sugar);
 
         let vessels = [
             (Vessel::Glass, inv.stock_glass),
@@ -532,7 +562,8 @@ fn draw_hud(
     };
     if let Some((key, text)) = label {
         let w = font.w(text, SZ_S) + 100;
-        let x = ((CV_W - w) / 2).max(8);
+        // слева, чтобы не под предметом в руках (viewmodel по центру)
+        let x = 8;
         if !qte.active && !bubbles.iter().any(|b| b.hits(x, HINT_Y, w, 44)) {
             panel(c, x, HINT_Y, w, 44);
             let kx = keycap(c, font, x + 10, HINT_Y + 6, 32, key);
@@ -775,12 +806,12 @@ fn draw_shopping(c: &mut Canvas, font: &Font, state: &GameState, inv: &Inventory
         // иконки
         match i {
             0 => {
-                icon_croutons(c, 88, y + 34);
-                icon_croutons(c, 132, y + 58);
+                blit_icon(c, &prop_icon(PropIcon::Croutons), 88, y + 30, 3);
+                blit_icon(c, &prop_icon(PropIcon::Croutons), 140, y + 54, 3);
             }
             1 => {
-                icon_sugar(c, 96, y + 28);
-                icon_sugar(c, 138, y + 56);
+                blit_icon(c, &prop_icon(PropIcon::Sugar), 96, y + 30, 3);
+                blit_icon(c, &prop_icon(PropIcon::Sugar), 148, y + 54, 3);
             }
             _ => {
                 blit_icon(c, &vessel_icon(Vessel::Glass, false), 84, y + 24, 3);
@@ -1012,24 +1043,22 @@ fn draw_pause(c: &mut Canvas, font: &Font, state: &GameState) {
     );
 }
 
-// ============ мелкие иконки (сухари/сахар) ============
+// ============ предмет в руках от первого лица (Doom-style viewmodel) ============
 
-/// Мешок сухарей.
-fn icon_croutons(c: &mut Canvas, x: i32, y: i32) {
-    c.rect(x + 4, y - 6, 28, 10, col::WOOD, 255);
-    c.frame(x + 4, y - 6, 28, 10, col::BLACK, 255);
-    c.rect(x, y, 36, 28, col::WOOD, 255);
-    c.frame(x, y, 36, 28, col::BLACK, 255);
-    c.blend(x + 12, y + 2, col::KVASS_D, 255);
-    c.blend(x + 22, y + 8, col::KVASS_D, 255);
-    c.blend(x + 18, y + 18, col::WOOD_D, 255);
+/// Выбранный предмет внизу экрана: как «оружие» в Doom. Покачивается
+/// по синусоиде при ходьбе, слегка дышит в покое.
+fn draw_viewmodel(c: &mut Canvas, inv: &Inventory, t: f32, moving: bool) {
+    let Some(item) = &inv.hands[inv.selected] else {
+        return;
+    };
+    let icon = item_icon(item);
+    let (bob, sway) = if moving {
+        (6.0 * (t * 6.1).sin(), 9.0 * (t * 3.1).sin())
+    } else {
+        (2.5 * (t * 2.2).sin(), 3.0 * (t * 1.7).sin())
+    };
+    let x = CV_W / 2 - 48 + sway as i32;
+    let y = (654.0 - 96.0 + bob) as i32;
+    blit_icon(c, &icon, x, y, 6);
 }
 
-/// Банка сахара.
-fn icon_sugar(c: &mut Canvas, x: i32, y: i32) {
-    c.rect(x + 4, y, 16, 10, col::METAL, 255);
-    c.rect(x, y + 8, 24, 32, col::PLASTER, 255);
-    c.frame(x, y + 8, 24, 32, col::BLACK, 255);
-    c.blend(x + 8, y + 18, col::WHITE, 255);
-    c.blend(x + 16, y + 26, col::WHITE, 255);
-}

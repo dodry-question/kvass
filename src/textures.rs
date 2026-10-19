@@ -234,6 +234,45 @@ fn gen_counter(t: &mut Vec<u8>) {
             px(t, x, y, c);
         }
     }
+
+    // Кассовый аппарат на фасаде прилавка (x 34..62, y 9..25): металлический
+    // корпус, дисплей-лампа, клавиши и чековая бумага.
+    for y in 9..26 {
+        for x in 34..62 {
+            let c = if y == 9 || x == 34 || x == 61 || y == 25 {
+                idx::BLACK
+            } else if x >= 42 && x <= 52 && (10..14).contains(&y) {
+                // дисплей: тёмный фон с янтарным числом
+                if y == 11 && x >= 44 && x <= 49 {
+                    idx::LAMP
+                } else {
+                    idx::SHADOW
+                }
+            } else if (15..24).contains(&y) && (x - 36) % 6 >= 1 && (x - 36) % 6 <= 4 {
+                // поле клавиш
+                let row = y / 5;
+                let col_key = (x - 36) / 6;
+                let key_on = (row + col_key) % 2 == 0;
+                if y % 5 == 4 {
+                    idx::BLACK
+                } else if key_on {
+                    idx::LAMP
+                } else {
+                    idx::PLASTER
+                }
+            } else if x >= 56 {
+                // справа — чековая бумага
+                if (12..23).contains(&y) {
+                    idx::WHITE
+                } else {
+                    idx::METAL
+                }
+            } else {
+                idx::METAL
+            };
+            px(t, x, y, c);
+        }
+    }
 }
 
 fn gen_floor(t: &mut Vec<u8>) {
