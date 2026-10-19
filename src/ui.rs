@@ -60,7 +60,15 @@ fn blink(t: f32, hz: f32) -> bool {
 
 // =================== Точка входа ===================
 
-/// customers: (позиция в мире, текст облачка, если есть).
+/// Данные о покупателе для UI: облачко реплики и иконка заказа (ТЗ №5).
+pub struct CustView {
+    pub pos: Vec2,
+    pub text: Option<String>,
+    pub order: Vessel,
+    /// Стоит в очереди — иконка заказа видна постоянно (ТЗ №5).
+    pub queued: bool,
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn draw_frame(
     canvas: &mut Canvas,
@@ -69,33 +77,46 @@ pub fn draw_frame(
     inv: &Inventory,
     barrels: &Barrels,
     qte: &BrewQte,
-    customers: &[(Vec2, Option<String>)],
+    wash: &crate::interact::WashQte,
+    cool: &crate::interact::CoolQte,
+    customers: &[CustView],
     t: f32,
     cam: &GameCam,
     map: &Map,
     moving: bool,
+    modal: &crate::modals::Modals,
 ) {
     match state.phase {
         Phase::Menu => draw_menu(canvas, font, t),
-        Phase::Shopping => draw_shopping(canvas, font, state, inv, t),
         Phase::DayEnd => draw_dayend(canvas, font, state, t),
         Phase::Final => draw_final(canvas, font, t),
         Phase::Paused => {
             let bubbles = bubble_layout(customers, font, cam);
-            draw_hud(canvas, font, state, inv, barrels, qte, t, map, cam, &bubbles);
+            draw_hud(canvas, font, state, inv, barrels, qte, wash, cool, t, map, cam, &bubbles);
             canvas.dim(150);
             draw_pause(canvas, font, state);
         }
         Phase::Playing | Phase::Tutorial => {
             let bubbles = bubble_layout(customers, font, cam);
             // предмет в руках — под HUD-слоем, чтобы плашки перекрывали его низ
-            if !qte.active {
+            if !qte.active && !wash.active && !cool.active {
                 draw_viewmodel(canvas, inv, t, moving);
             }
-            draw_hud(canvas, font, state, inv, barrels, qte, t, map, cam, &bubbles);
+            draw_hud(canvas, font, state, inv, barrels, qte, wash, cool, t, map, cam, &bubbles);
             draw_bubbles(canvas, font, &bubbles);
             if state.phase == Phase::Tutorial {
                 draw_tutorial(canvas, font, state, customers, cam, t);
+            }
+            // ТЗ №3/№4: открытая модалка рисуется поверх затемнённого мира.
+            if modal.is_open() {
+                canvas.dim(150);
+                match modal.modal {
+                    crate::modals::Modal::Supply => {
+                        draw_supply_modal(canvas, font, state, modal)
+                    }
+                    crate::modals::Modal::VesselPick => draw_vesselpick_modal(canvas, font, inv),
+                    crate::modals::Modal::None => {}
+                }
             }
         }
     }
@@ -238,6 +259,8 @@ struct Bubble {
     h: i32,
     screen_x: i32,
     lines: Vec<String>,
+    /// Иконка заказа слева от реплики (ТЗ №5): Some — для гостей в очереди.
+    order: Option<Vessel>,
 }
 
 impl Bubble {
@@ -246,11 +269,7 @@ impl Bubble {
     }
 }
 
-fn bubble_layout(
-    customers: &[(Vec2, Option<String>)],
-    font: &Font,
-    cam: &GameCam,
-) -> Vec<Bubble> {
+fn bubble_layout(customers: &[CustView], font: &Font, cam: &GameCam) -> Vec<Bubble> {
     let dir_x = cam.angle.cos();
     let dir_y = cam.angle.sin();
     let plane_x = -dir_y * 0.66;
@@ -258,8 +277,12 @@ fn bubble_layout(
     let inv_det = 1.0 / (plane_x * dir_y - dir_x * plane_y);
     let ts = SZ_M;
     let mut out = Vec::new();
-    for (pos, text) in customers {
-        let Some(text) = text else { continue };
+    for cu in customers {
+        let text = cu.text.as_deref();
+        if text.is_none() && !cu.queued {
+            continue;
+        }
+        let pos = &cu.pos;
         let sx = pos.x - cam.x;
         let sy = pos.y - cam.y;
         let tx = inv_det * (dir_y * sx - dir_x * sy);
@@ -274,18 +297,24 @@ fn bubble_layout(
         let feet = ((HORIZON as f32 + (0.5 * SCREEN_H as f32) / ty) * 2.0) as i32;
         let top = feet - sprite_h;
 
+        // ТЗ №5: очередь всегда показывает иконку заказа (пока текста нет тоже).
+        let icon_w = if cu.queued { 60 } else { 0 };
+
         // перенос слов: строка ≤ 430 px
-        let mut lines: Vec<String> = vec![String::new()];
-        for word in text.split(' ') {
-            let li = lines.len() - 1;
-            let cand_w = font.w(&lines[li], ts) + font.w(word, ts) + font.w(" ", ts);
-            if !lines[li].is_empty() && cand_w <= 430 {
-                lines[li].push(' ');
-                lines[li].push_str(word);
-            } else if !lines[li].is_empty() {
-                lines.push(String::from(word));
-            } else {
-                lines[li].push_str(word);
+        let mut lines: Vec<String> = Vec::new();
+        if let Some(text) = text {
+            lines.push(String::new());
+            for word in text.split(' ') {
+                let li = lines.len() - 1;
+                let cand_w = font.w(&lines[li], ts) + font.w(word, ts) + font.w(" ", ts);
+                if !lines[li].is_empty() && cand_w <= 430 {
+                    lines[li].push(' ');
+                    lines[li].push_str(word);
+                } else if !lines[li].is_empty() {
+                    lines.push(String::from(word));
+                } else {
+                    lines[li].push_str(word);
+                }
             }
         }
         let w = lines
@@ -294,8 +323,9 @@ fn bubble_layout(
             .max()
             .unwrap_or(0)
             .max(font.w("И", ts))
-            + 24;
-        let h = lines.len() as i32 * font.line(ts) + 20;
+            + 24
+            + icon_w;
+        let h = (lines.len() as i32 * font.line(ts) + 20).max(if cu.queued { 60 } else { 0 });
         if screen_x + w < 0 || screen_x - w > CV_W {
             continue;
         }
@@ -318,6 +348,7 @@ fn bubble_layout(
             h,
             screen_x,
             lines,
+            order: if cu.queued { Some(cu.order) } else { None },
         });
     }
     out
@@ -339,9 +370,18 @@ fn draw_bubbles(c: &mut Canvas, font: &Font, bubbles: &[Bubble]) {
             let half = 5 - dy / 2;
             c.rect(tx - half, b.by + b.h + dy, half * 2 + 1, 1, col::WHITE, 250);
         }
+        // ТЗ №5: крупная иконка посуды с квасом слева от реплики
+        let mut tx0 = b.bx + 12;
+        if let Some(v) = b.order {
+            let iy = b.by + (b.h - 48) / 2;
+            c.rect(b.bx + 6, iy - 4, 56, 56, col::SHAD, 255);
+            c.frame(b.bx + 6, iy - 4, 56, 56, col::BLACK, 255);
+            blit_icon(c, &vessel_icon(v, true), b.bx + 10, iy, 3);
+            tx0 = b.bx + 66;
+        }
         let mut ly = b.by + 10;
         for l in &b.lines {
-            font.draw(c, b.bx + 12, ly, l, ts, col::INK, 255);
+            font.draw(c, tx0, ly, l, ts, col::INK, 255);
             ly += font.line(ts);
         }
     }
@@ -355,6 +395,8 @@ fn draw_hud(
     inv: &Inventory,
     barrels: &Barrels,
     qte: &BrewQte,
+    wash: &crate::interact::WashQte,
+    cool: &crate::interact::CoolQte,
     t: f32,
     map: &Map,
     cam: &GameCam,
@@ -447,9 +489,9 @@ fn draw_hud(
     }
 
     // --- «Нужна посуда» (верх по центру, мигает) ---
-    let posuda_nul = inv.stock_glass + inv.stock_jar + inv.stock_bottle == 0;
+    let posuda_nul = inv.stock_jar + inv.stock_bottle == 0;
     if posuda_nul && state.phase == Phase::Playing && blink(t, 2.0) {
-        let warn = "ПОСУДА КОНЧИЛАСЬ! ЗАКУПИТЕ (3) ЗАВТРА";
+        let warn = "ПОСУДА КОНЧИЛАСЬ! КУПИТЕ У ОКНА СНАБЖЕНИЯ (E)";
         let ww = font.w(warn, SZ_M) + 32;
         let x = (CV_W - ww) / 2;
         panel(c, x, 8, ww, 44);
@@ -523,6 +565,12 @@ fn draw_hud(
             put_stock(c, font, ix + 4, BAR_Y + 76, n);
             ix += 78;
         }
+        // ТЗ №8: грязные стаканы ждут мойки — счётчик под стаканами
+        if inv.dirty_glasses > 0 {
+            let d = format!("ГРЯЗНЫХ: {}", inv.dirty_glasses);
+            let dx = x + 190;
+            font.draw(c, dx, BAR_Y + 96, &d, SZ_S, col::RED, 255);
+        }
     }
 
     // Пауза-подсказка (правый край полки)
@@ -552,8 +600,10 @@ fn draw_hud(
         match map.get(fx.floor() as i32, fy.floor() as i32) {
             Tile::Croutons => Some(("E", "СУХАРИ - ВЗЯТЬ ГОРСТЬ")),
             Tile::Sugar => Some(("E", "САХАР С ИЗЮМОМ - ВЗЯТЬ")),
-            Tile::Water => Some(("E", "КОЛОНКА - НАБРАТЬ ВЕДРО ВОДЫ")),
+            Tile::Water => Some(("E", "КОЛОНКА - НАБРАТЬ ВЕДРО ЛЕДЯНОЙ ВОДЫ")),
             Tile::Shelf => Some(("E", "СТЕЛЛАЖ - ВЗЯТЬ ПУСТУЮ ПОСУДУ")),
+            Tile::Supply => Some(("E", "ОКНО СНАБЖЕНИЯ - ЗАКУПКА СЫРЬЯ")),
+            Tile::Sink => Some(("E", "МОЙКА - ПОМЫТЬ ГРЯЗНЫЕ СТАКАНЫ")),
             Tile::Barrel => {
                 if !qte.active {
                     Some(("E", "БОЧКА: ДЕРЖИТЕ E - РОЗЛИВ / РЕЦЕПТ"))
@@ -580,6 +630,14 @@ fn draw_hud(
     // --- Мини-игра ускорения брожения ---
     if qte.active {
         draw_qte(c, font, qte, barrels);
+    }
+    // --- Мини-игра мытья стаканов (ТЗ №8) ---
+    if wash.active || wash.flash != 0.0 {
+        draw_wash_qte(c, font, wash, inv);
+    }
+    // --- Мини-игра охлаждения бочки (ТЗ №9) ---
+    if cool.active || cool.flash != 0.0 {
+        draw_cool_qte(c, font, cool, barrels);
     }
 }
 
@@ -645,12 +703,118 @@ fn draw_qte(c: &mut Canvas, font: &Font, qte: &BrewQte, barrels: &Barrels) {
     }
 }
 
+/// Полоска мытья стаканов (ТЗ №8): перевёрнутый стакан, давление воды,
+/// 3 попадания в синюю зону смывают пену.
+fn draw_wash_qte(c: &mut Canvas, font: &Font, wash: &crate::interact::WashQte, inv: &Inventory) {
+    let w = 640i32;
+    let x = (CV_W - w) / 2;
+    let y = MSG_Y - 122;
+    let h = 96;
+
+    panel(c, x, y, w, h);
+    let title = format!(
+        "МЫТЬЁ СТАКАНОВ: ПРОБЕЛ В ЗОНУ ДАВЛЕНИЯ ({}/3)  ГРЯЗНЫХ: {}",
+        wash.hits, inv.dirty_glasses
+    );
+    font.draw_fit_sh(c, x + 10, y + 12, w - 20, &title, SZ_M, col::LAMP, 255);
+
+    // перевёрнутый стакан слева от полоски
+    blit_icon_rot(c, &vessel_icon(Vessel::Glass, false), x + 30, y + 64, 2.0, std::f32::consts::PI);
+
+    let bx = x + 70;
+    let bw = w - 96;
+    let by = y + 52;
+    let bh = 24;
+    c.rect(bx, by, bw, bh, col::METAL_D, 255);
+    c.frame(bx, by, bw, bh, col::BLACK, 255);
+    let z0 = bx + (bw as f32 * wash.zone0) as i32;
+    let zw = (((bw as f32) * (wash.zone1 - wash.zone0)) as i32).max(6);
+    let zone = if wash.flash > 0.0 { col::WHITE } else { col::SKY };
+    c.rect(z0, by + 2, zw, bh - 4, zone, 255);
+    c.frame(z0, by + 2, zw, bh - 4, col::BLACK, 180);
+    let rx = bx + ((bw - 10) as f32 * wash.pos) as i32;
+    c.rect(rx, by - 4, 10, bh + 8, col::LAMP, 255);
+    c.frame(rx, by - 4, 10, bh + 8, col::BLACK, 255);
+
+    if wash.flash.abs() > 0.05 {
+        let (text, color) = if wash.flash > 0.0 {
+            ("ПЕНА СМЫТА!".to_string(), col::WHITE)
+        } else {
+            ("МИМО!".to_string(), col::RED)
+        };
+        let fw = font.w(&text, SZ_L) + 24;
+        let fx = (CV_W - fw) / 2;
+        let fy = y - 46;
+        c.rect(fx, fy, fw, 40, col::SHAD, 235);
+        c.frame(fx, fy, fw, 40, color, 255);
+        font.draw_fit_sh(c, fx + 10, fy + 6, fw - 20, &text, SZ_L, color, 255);
+    }
+}
+
+/// Полоска охлаждения перебродившей бочки (ТЗ №9): ведро ледяной воды,
+/// синяя зона, попадание снижает переброд на 25%.
+fn draw_cool_qte(
+    c: &mut Canvas,
+    font: &Font,
+    cool: &crate::interact::CoolQte,
+    barrels: &Barrels,
+) {
+    let w = 640i32;
+    let x = (CV_W - w) / 2;
+    let y = MSG_Y - 122;
+    let h = 96;
+
+    panel(c, x, y, w, h);
+    let pct = cool
+        .barrel
+        .and_then(|k| barrels.map.get(&k))
+        .and_then(|b| match b.phase {
+            BarrelPhase::Overripe(p) | BarrelPhase::Ready(p) => Some(p),
+            _ => None,
+        })
+        .unwrap_or(0.0) as i32;
+    let title = format!("ОХЛАЖДЕНИЕ БОЧКИ {pct}%: ПРОБЕЛ В СИНЮЮ ЗОНУ (−25%)");
+    font.draw_fit_sh(c, x + 10, y + 12, w - 20, &title, SZ_M, col::LAMP, 255);
+
+    // ведро слева от полоски
+    blit_icon_rot(c, &prop_icon(PropIcon::Bucket), x + 30, y + 64, 2.0, 0.0);
+
+    let bx = x + 70;
+    let bw = w - 96;
+    let by = y + 52;
+    let bh = 24;
+    c.rect(bx, by, bw, bh, col::METAL_D, 255);
+    c.frame(bx, by, bw, bh, col::BLACK, 255);
+    let z0 = bx + (bw as f32 * cool.zone0) as i32;
+    let zw = (((bw as f32) * (cool.zone1 - cool.zone0)) as i32).max(6);
+    let zone = if cool.flash > 0.0 { col::WHITE } else { col::SKY };
+    c.rect(z0, by + 2, zw, bh - 4, zone, 255);
+    c.frame(z0, by + 2, zw, bh - 4, col::BLACK, 180);
+    let rx = bx + ((bw - 10) as f32 * cool.pos) as i32;
+    c.rect(rx, by - 4, 10, bh + 8, col::LAMP, 255);
+    c.frame(rx, by - 4, 10, bh + 8, col::BLACK, 255);
+
+    if cool.flash.abs() > 0.05 {
+        let (text, color) = if cool.flash > 0.0 {
+            ("БОЧКА ОХЛАЖДЕНА!".to_string(), col::WHITE)
+        } else {
+            ("МИМО!".to_string(), col::RED)
+        };
+        let fw = font.w(&text, SZ_L) + 24;
+        let fx = (CV_W - fw) / 2;
+        let fy = y - 46;
+        c.rect(fx, fy, fw, 40, col::SHAD, 235);
+        c.frame(fx, fy, fw, 40, color, 255);
+        font.draw_fit_sh(c, fx + 10, fy + 6, fw - 20, &text, SZ_L, color, 255);
+    }
+}
+
 /// Обучение: панель инструкции и мигающий маркер на цель.
 fn draw_tutorial(
     c: &mut Canvas,
     font: &Font,
     state: &GameState,
-    customers: &[(Vec2, Option<String>)],
+    customers: &[CustView],
     cam: &GameCam,
     t: f32,
 ) {
@@ -669,8 +833,8 @@ fn draw_tutorial(
     font.draw(c, x + kx + 34, y + 56, skip, SZ_S, col::TILE, 255);
 
     // цель: на последнем шаге — сама бабушка
-    let target = if step == 6 {
-        customers.first().map(|(p, _)| (p.x, p.y))
+    let target = if step == 7 {
+        customers.first().map(|cu| (cu.pos.x, cu.pos.y))
     } else {
         Some(ts.target)
     };
@@ -783,77 +947,110 @@ fn draw_menu(c: &mut Canvas, font: &Font, t: f32) {
     }
 }
 
-fn draw_shopping(c: &mut Canvas, font: &Font, state: &GameState, inv: &Inventory, t: f32) {
-    c.rect(0, 0, CV_W, CV_H, col::PLASTER, 255);
-    // шапка
-    c.rect(0, 0, CV_W, 100, col::RED, 255);
-    c.rect(0, 100, CV_W, 4, col::RED_D, 255);
-    font.draw(c, 48, 26, "ЗАКУПКА СЫРЬЯ", SZ_T, col::WHITE, 255);
-    let day = format!("ДЕНЬ {}", state.day);
-    font.draw(c, CV_W - 48 - font.w(&day, SZ_L), 36, &day, SZ_L, col::WHITE, 240);
+/// Модалка окна снабжения (ТЗ №3): ретро-панель с заклёпками, 4 товара.
+fn draw_supply_modal(
+    c: &mut Canvas,
+    font: &Font,
+    state: &GameState,
+    modals: &crate::modals::Modals,
+) {
+    use crate::modals::SupplyKind;
+    let w = 900i32;
+    let h = 460i32;
+    let x = (CV_W - w) / 2;
+    let y = (CV_H - h) / 2 - 20;
+    panel(c, x, y, w, h);
+    // заклёпки по углам — стиль DOS-таблички
+    for (rx, ry) in [(x + 14, y + 14), (x + w - 22, y + 14), (x + 14, y + h - 22), (x + w - 22, y + h - 22)] {
+        c.rect(rx, ry, 8, 8, col::METAL, 255);
+        c.frame(rx, ry, 8, 8, col::BLACK, 255);
+    }
+    red_plate(c, x + 40, y + 24, w - 80, 54);
+    font.draw_fit_sh(c, x + 40, y + 36, w - 80, "ОКНО СНАБЖЕНИЯ", SZ_L, col::WHITE, 255);
 
     let money = format!("КАССА: {} К.", state.money);
-    font.draw(c, 48, 126, &money, SZ_L, col::INK, 255);
-    let norm = format!("НОРМА ДНЯ: {} К.", state.norm);
-    font.draw(c, CV_W - 48 - font.w(&norm, SZ_L), 126, &norm, SZ_L, col::INK, 240);
+    font.draw(c, x + 40, y + 92, &money, SZ_M, col::LAMP, 255);
+    let hint = "ESC ИЛИ E — ЗАКРЫТЬ";
+    font.draw(c, x + w - 40 - font.w(hint, SZ_S), y + 96, hint, SZ_S, col::TILE, 255);
 
-    // три карточки товара
-    const CARD_H: i32 = 136;
-    for i in 0..3u32 {
-        let y = 192 + (i as i32) * (CARD_H + 18);
-        c.rect(48, y, CV_W - 96, CARD_H, col::WHITE, 255);
-        c.frame(48, y, CV_W - 96, CARD_H, col::BLACK, 255);
-        c.frame(52, y + 4, CV_W - 104, CARD_H - 8, col::RED, 60);
-        let (key, name, desc) = match i {
-            0 => ("1", "СУХАРИ РЖАНЫЕ", "10 ГОРСТЕЙ - 20 К."),
-            1 => ("2", "САХАР С ИЗЮМОМ", "10 ПОРЦИЙ - 10 К."),
-            _ => ("3", "ПОСУДА", "4 СТАКАНА + 4 БАНКИ + 4 БУТЫЛКИ - 15 К."),
-        };
-        // иконки
-        match i {
-            0 => {
-                blit_icon(c, &prop_icon(PropIcon::Croutons), 88, y + 30, 3);
-                blit_icon(c, &prop_icon(PropIcon::Croutons), 140, y + 54, 3);
+    // карточки товаров (стаканы не продаются — ТЗ №8)
+    const ROW_H: i32 = 64;
+    let kinds = [
+        SupplyKind::Croutons,
+        SupplyKind::Sugar,
+        SupplyKind::Jar,
+        SupplyKind::Bottle,
+    ];
+    for (i, kind) in kinds.into_iter().enumerate() {
+        let ry = y + 130 + i as i32 * (ROW_H + 10);
+        c.rect(x + 40, ry, w - 80, ROW_H, col::PLASTER, 255);
+        c.frame(x + 40, ry, w - 80, ROW_H, col::BLACK, 255);
+        let _ = keycap(c, font, x + 52, ry + 12, 40, &kind.key().to_string());
+        // иконка товара
+        match kind {
+            SupplyKind::Croutons => {
+                blit_icon(c, &prop_icon(PropIcon::Croutons), x + 120, ry + 16, 3)
             }
-            1 => {
-                blit_icon(c, &prop_icon(PropIcon::Sugar), 96, y + 30, 3);
-                blit_icon(c, &prop_icon(PropIcon::Sugar), 148, y + 54, 3);
-            }
-            _ => {
-                blit_icon(c, &vessel_icon(Vessel::Glass, false), 84, y + 24, 3);
-                blit_icon(c, &vessel_icon(Vessel::Jar, false), 148, y + 24, 3);
-                blit_icon(c, &vessel_icon(Vessel::Bottle, false), 212, y + 24, 3);
+            SupplyKind::Sugar => blit_icon(c, &prop_icon(PropIcon::Sugar), x + 120, ry + 16, 3),
+            SupplyKind::Jar => blit_icon(c, &vessel_icon(Vessel::Jar, false), x + 120, ry + 16, 3),
+            SupplyKind::Bottle => {
+                blit_icon(c, &vessel_icon(Vessel::Bottle, false), x + 120, ry + 16, 3)
             }
         }
-        font.draw(c, 296, y + 20, name, SZ_L, col::INK, 255);
-        font.draw(c, 296, y + 66, desc, SZ_S, [80, 66, 52], 255);
-        let have = match i {
-            0 => format!("В ЗАПАСЕ: {}", inv.stock_croutons),
-            1 => format!("В ЗАПАСЕ: {}", inv.stock_sugar),
-            _ => format!(
-                "В ЗАПАСЕ: {}",
-                inv.stock_glass + inv.stock_jar + inv.stock_bottle
-            ),
-        };
-        font.draw(c, 296, y + 98, &have, SZ_M, col::GREEN, 255);
-        let _ = keycap(c, font, CV_W - 216, y + (CARD_H - 40) / 2, 40, key);
+        let name = kind.name();
+        font.draw(c, x + 190, ry + 8, name, SZ_M, col::INK, 255);
+        let qty = format!("+{} ШТ", kind.qty());
+        font.draw(c, x + 190, ry + 36, &qty, SZ_S, [80, 66, 52], 255);
+        let price = format!("−{} К.", kind.price());
+        font.draw(c, x + w - 200, ry + 18, &price, SZ_L, col::RED_D, 255);
     }
 
-    // подсказка
-    let hint = if state.day == 1 {
-        "НАЧАЛО: ЗАКУПИТЕ СУХАРИ (1), САХАР (2) И ПОСУДУ (3) - ИЛИ СРАЗУ ЖМИТЕ ENTER"
-    } else {
-        "СОВЕТ: ДЕРЖИТЕ ДВЕ БОЧКИ НА РАЗНЫХ ФАЗАХ - КВАС ГОТОВИТСЯ НЕ СРАЗУ"
-    };
-    font.draw(c, 48, CV_H - 128, hint, SZ_S, [100, 84, 66], 255);
-    if blink(t, 2.0) {
-        let go = "ENTER - ОТКРЫТЬ ЛАВКУ";
-        let gw = font.w(go, SZ_L);
-        let gx = (CV_W - gw) / 2;
-        c.rect(gx - 26, CV_H - 92, gw + 52, 58, col::SHAD, 248);
-        c.frame(gx - 26, CV_H - 92, gw + 52, 58, col::RED, 255);
-        font.draw(c, gx, CV_H - 80, go, SZ_L, col::LAMP, 255);
+    // что уже в пути
+    if !modals.pending.is_empty() {
+        let pend: Vec<String> = modals
+            .pending
+            .iter()
+            .map(|d| format!("{} (~{:.0} С)", d.kind.name(), d.t.max(0.0)))
+            .collect();
+        let p = format!("В ПУТИ: {}", pend.join(", "));
+        font.draw_fit_sh(c, x + 40, y + h - 44, w - 80, &p, SZ_S, col::SKY, 255);
     }
+}
+
+/// Модалка стеллажа посуды (ТЗ №4): 3 слота, цифра берёт посуду в руки.
+fn draw_vesselpick_modal(c: &mut Canvas, font: &Font, inv: &Inventory) {
+    let w = 780i32;
+    let h = 300i32;
+    let x = (CV_W - w) / 2;
+    let y = (CV_H - h) / 2 - 30;
+    panel(c, x, y, w, h);
+    for (rx, ry) in [(x + 14, y + 14), (x + w - 22, y + 14), (x + 14, y + h - 22), (x + w - 22, y + h - 22)] {
+        c.rect(rx, ry, 8, 8, col::METAL, 255);
+        c.frame(rx, ry, 8, 8, col::BLACK, 255);
+    }
+    red_plate(c, x + 40, y + 24, w - 80, 54);
+    font.draw_fit_sh(c, x + 40, y + 36, w - 80, "СТЕЛЛАЖ ПОСУДЫ", SZ_L, col::WHITE, 255);
+
+    let slots = [
+        (Vessel::Glass, inv.stock_glass),
+        (Vessel::Jar, inv.stock_jar),
+        (Vessel::Bottle, inv.stock_bottle),
+    ];
+    let sw = (w - 100) / 3;
+    for (i, (v, n)) in slots.into_iter().enumerate() {
+        let sx = x + 50 + i as i32 * (sw + 0);
+        c.rect(sx, y + 100, sw - 12, 130, col::METAL_D, 255);
+        c.frame(sx, y + 100, sw - 12, 130, col::BLACK, 255);
+        let _ = keycap(c, font, sx + 10, y + 108, 36, &(i + 1).to_string());
+        blit_icon(c, &vessel_icon(v, false), sx + sw / 2 - 28, y + 112, 3);
+        let name = v.name();
+        font.draw_fit_sh(c, sx, y + 176, sw - 12, name, SZ_M, col::LAMP, 255);
+        let cnt = format!("ЧИСТЫХ: {n}");
+        let colr = if n == 0 { col::RED } else { col::WHITE };
+        font.draw_fit_sh(c, sx, y + 204, sw - 12, &cnt, SZ_S, colr, 255);
+    }
+    let hint = "ЦИФРА — ВЗЯТЬ В РУКИ. ESC ИЛИ E — ЗАКРЫТЬ";
+    font.draw_fit_sh(c, x + 40, y + h - 40, w - 80, hint, SZ_S, col::TILE, 255);
 }
 
 fn draw_dayend(c: &mut Canvas, font: &Font, state: &GameState, t: f32) {

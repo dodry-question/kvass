@@ -3,7 +3,7 @@
 use bevy::prelude::*;
 use rand::prelude::*;
 
-use crate::customer::{spawn_customer, spot_taken, Customer};
+use crate::customer::{spawn_customer, Customer, QUEUE_SPOTS};
 use crate::sprites::NpcKind;
 
 #[derive(Resource)]
@@ -19,8 +19,6 @@ pub enum Phase {
     Menu,
     /// Обучение: без времени, один гость, подсказки с маркером.
     Tutorial,
-    /// Закупка сырья (клавиши 1-3, Enter — начать день).
-    Shopping,
     /// Игровой день.
     Playing,
     /// Итоги дня.
@@ -106,10 +104,41 @@ pub fn give_start_package(state: &mut GameState, inv: &mut crate::inventory::Inv
     state.day_earned = 0;
     inv.stock_croutons = 2;
     inv.stock_sugar = 2;
-    inv.stock_glass = 4;
+    // ТЗ №8: стаканы многоразовые — стартовый пул 6 штук, не покупаются.
+    inv.stock_glass = 6;
+    inv.dirty_glasses = 0;
     inv.stock_jar = 2;
     inv.stock_bottle = 1;
     inv.hands = [None; 4];
+}
+
+/// Начало игрового дня (ТЗ №3: фазы закупки больше нет — день стартует
+/// сразу, сырьё покупают в «окне снабжения» посреди смены).
+pub fn start_day(
+    state: &mut GameState,
+    barrels: &mut crate::brewing::Barrels,
+    dirty: &mut Dirty,
+) {
+    state.phase = Phase::Playing;
+    state.time_left = day_len(state.day);
+    state.spawn_t = 10.0;
+    state.fine = 0;
+    state.fine_reason.clear();
+    // сброс мира: бочки и грязь (покупателей чистит вызывающий)
+    for b in barrels.map.values_mut() {
+        *b = crate::brewing::Barrel::new();
+    }
+    dirty.0 = 0;
+    let d = state.day;
+    let n = state.norm;
+    state.notify(format!("ДЕНЬ {d} НАЧАЛСЯ! НОРМА {n} К. ОКНО СНАБЖЕНИЯ (E)"));
+}
+
+/// Дespawn всех покупателей (вызывается перед началом нового дня).
+pub fn clear_customers(commands: &mut Commands, customers: &Query<Entity, With<Customer>>) {
+    for e in customers.iter() {
+        commands.entity(e).despawn();
+    }
 }
 
 pub fn day_len(day: u32) -> f32 {
@@ -160,52 +189,12 @@ pub fn phase_system(
             if go {
                 give_start_package(&mut state, &mut inv);
                 if state.tut_done {
-                    state.phase = Phase::Shopping;
-                    state.notify("НАЧАЛО ДНЯ 1. СЫРЬЁ: 1-3, ЗАТЕМ ENTER".into());
+                    start_day(&mut state, &mut barrels, &mut dirty);
                 } else {
                     state.phase = Phase::Tutorial;
                     state.tut_step = 0;
                     state.notify("ОБУЧЕНИЕ. W A S D - ХОД, МЫШЬ - ОБЗОР".into());
                 }
-            }
-        }
-        Phase::Shopping => {
-            if keys.just_pressed(KeyCode::Digit1) && state.money >= 20 {
-                state.money -= 20;
-                inv.stock_croutons += 10;
-                state.notify("КУПЛЕНО: СУХАРИ (10 ГОРСТЕЙ) -20 К.".into());
-            }
-            if keys.just_pressed(KeyCode::Digit2) && state.money >= 10 {
-                state.money -= 10;
-                inv.stock_sugar += 10;
-                state.notify("КУПЛЕНО: САХАР+ИЗЮМ (10 ПОРЦИЙ) -10 К.".into());
-            }
-            if keys.just_pressed(KeyCode::Digit3) && state.money >= 15 {
-                state.money -= 15;
-                inv.stock_glass += 4;
-                inv.stock_jar += 4;
-                inv.stock_bottle += 4;
-                state.notify("КУПЛЕНО: ПОСУДА (4+4+4) -15 К.".into());
-            }
-            let go = keys.just_pressed(KeyCode::Enter)
-                || keys.just_pressed(KeyCode::NumpadEnter)
-                || keys.just_pressed(KeyCode::Space);
-            if go {
-                state.phase = Phase::Playing;
-                state.time_left = day_len(state.day);
-                state.spawn_t = 10.0;
-                state.fine = 0;
-                state.fine_reason.clear();
-                // сброс мира: бочки, покупатели, грязь
-                for b in barrels.map.values_mut() {
-                    *b = crate::brewing::Barrel::new();
-                }
-                for e in customers.iter() {
-                    commands.entity(e).despawn();
-                }
-                dirty.0 = 0;
-                let d = state.day;
-                state.notify(format!("ДЕНЬ {} НАЧАЛСЯ!", d));
             }
         }
         Phase::DayEnd => {
@@ -217,18 +206,15 @@ pub fn phase_system(
                     state.phase = Phase::Final;
                     return;
                 }
-                // следующий день
-                let _ = &mut commands;
+                // следующий день — сразу в игру (ТЗ №3: закупки нет)
                 state.day += 1;
                 state.norm = norm_for(state.day);
                 state.day_earned = 0;
-                state.phase = Phase::Shopping;
                 // Поток покупателей щадящий: в день 1 один человек за раз,
                 // дальше чуть плотнее, но без очереди в три ряда.
                 state.spawn_interval = (22.0 - state.day as f32 * 2.5).max(11.0);
-                let d = state.day;
-                let n = state.norm;
-                state.notify(format!("ДЕНЬ {}. НОРМА {} К. ЗАКУПИТЕ СЫРЬЁ.", d, n));
+                clear_customers(&mut commands, &customers);
+                start_day(&mut state, &mut barrels, &mut dirty);
             }
         }
         Phase::Final => {
@@ -330,9 +316,11 @@ pub fn day_system(
     // спавн покупателей
     state.spawn_t -= dt;
     if state.spawn_t <= 0.0 {
-        let mut taken = [false; 4];
+        let mut taken = [false; QUEUE_SPOTS.len()];
         for c in customers.iter() {
-            taken[c.spot] = true;
+            if c.spot < taken.len() {
+                taken[c.spot] = true;
+            }
         }
         let pool = customer_pool(state.day);
         let mut rng = &mut game_rng.0;

@@ -36,9 +36,13 @@ pub enum TexId {
     SugarShelf = 12,
     /// Колонка с водой: кран и ведро у кафеля.
     WaterTap = 13,
+    /// Окно снабжения: тёмное окно в стене с деревянным подоконником.
+    Supply = 14,
+    /// Мойка посуды: кафель, раковина, кран и сушилка со стаканами.
+    Sink = 15,
 }
 
-pub const NUM_TEX: usize = 14;
+pub const NUM_TEX: usize = 16;
 
 pub struct Textures {
     /// data[tex][y*64+x] = индекс палитры
@@ -66,6 +70,8 @@ impl Textures {
         gen_croutons(&mut data[TexId::CroutonsShelf as usize]);
         gen_sugar(&mut data[TexId::SugarShelf as usize]);
         gen_water(&mut data[TexId::WaterTap as usize]);
+        gen_supply(&mut data[TexId::Supply as usize]);
+        gen_sink(&mut data[TexId::Sink as usize]);
         Self { data }
     }
 
@@ -247,7 +253,7 @@ fn gen_counter(t: &mut Vec<u8>) {
                 let seam = x % 21 == 20;
                 if seam {
                     idx::WOOD_DARK
-                } else if (y % 7 == 0) {
+                } else if y % 7 == 0 {
                     idx::WOOD_DARK
                 } else {
                     noisy(&mut rng, idx::WOOD_LIGHT, idx::WOOD_DARK, 0.1)
@@ -540,6 +546,124 @@ fn gen_water(t: &mut Vec<u8>) {
                 } else {
                     idx::METAL
                 };
+            }
+            px(t, x, y, c);
+        }
+    }
+}
+
+/// Окно снабжения (ТЗ №3): тёмное окно в штукатурной стене с деревянным
+/// подоконником и красной табличкой «СНАБ» (условной — без букв).
+fn gen_supply(t: &mut Vec<u8>) {
+    let mut rng = StdRng::seed_from_u64(21);
+    for y in 0..TEX_SIZE {
+        for x in 0..TEX_SIZE {
+            // фон — штукатурка
+            let mut c = noisy(&mut rng, idx::PLASTER, idx::TILE_DARK, 0.10);
+            // оконный проём
+            if (12..52).contains(&x) && (8..40).contains(&y) {
+                // рама
+                let frame = x == 12 || x == 51 || y == 8 || y == 39;
+                c = if frame {
+                    idx::WOOD_DARK
+                } else if (16..48).contains(&x) && (12..36).contains(&y) {
+                    // тёмное стекло с лёгким бликом
+                    if x + y == 40 || x + y == 41 {
+                        idx::METAL
+                    } else {
+                        idx::SHADOW
+                    }
+                } else {
+                    idx::WOOD_LIGHT
+                };
+            }
+            // подоконник
+            if (8..56).contains(&x) && (40..45).contains(&y) {
+                c = if y == 40 { idx::WOOD_LIGHT } else { idx::WOOD_DARK };
+            }
+            // красная табличка «СНАБ» над окном
+            if (18..46).contains(&x) && (1..6).contains(&y) {
+                c = if y == 1 || y == 5 || x == 18 || x == 45 {
+                    idx::BLACK
+                } else if (x + 2) % 6 < 2 {
+                    idx::WHITE
+                } else {
+                    idx::RED
+                };
+            }
+            // мешки с мукой у стены внизу
+            if (6..20).contains(&x) && (48..60).contains(&y) {
+                c = if (6..20).contains(&x) && y == 48 {
+                    idx::WOOD_DARK
+                } else {
+                    noisy(&mut rng, idx::WOOD_LIGHT, idx::PLASTER, 0.3)
+                };
+            }
+            px(t, x, y, c);
+        }
+    }
+}
+
+/// Мойка посуды (ТЗ №8): кафель, металлическая раковина, кран,
+/// сушилка с перевёрнутыми стаканами.
+fn gen_sink(t: &mut Vec<u8>) {
+    let mut rng = StdRng::seed_from_u64(31);
+    for y in 0..TEX_SIZE {
+        for x in 0..TEX_SIZE {
+            // кафельная стена
+            let grout = x % 16 == 0 || y % 16 == 0;
+            let mut c = if grout {
+                idx::TILE_DARK
+            } else {
+                noisy(&mut rng, idx::TILE, idx::PLASTER, 0.08)
+            };
+            // кран сверху
+            if (28..36).contains(&x) && y < 30 {
+                c = if x == 28 || x == 35 {
+                    idx::BLACK
+                } else if x == 30 {
+                    idx::WHITE
+                } else {
+                    idx::METAL
+                };
+            }
+            if (30..38).contains(&x) && (28..33).contains(&y) {
+                c = idx::METAL_DARK;
+            }
+            // струя воды
+            if (33..36).contains(&x) && (33..42).contains(&y) {
+                c = if x == 34 { idx::WHITE } else { idx::SKY };
+            }
+            // раковина
+            if (10..54).contains(&x) && (42..62).contains(&y) {
+                c = if y == 42 || x == 10 || x == 53 || y == 61 {
+                    idx::BLACK
+                } else if y == 44 {
+                    idx::METAL_DARK
+                } else if x == 13 {
+                    idx::WHITE
+                } else if y > 55 {
+                    // вода в раковине
+                    if (x + y) % 3 == 0 {
+                        idx::SKY
+                    } else {
+                        idx::METAL_DARK
+                    }
+                } else {
+                    idx::METAL
+                };
+            }
+            // перевёрнутые стаканы на сушилке (слева)
+            for (gx, gy) in [(16, 34), (24, 34), (32, 34)] {
+                if (gx..gx + 5).contains(&x) && (gy..gy + 8).contains(&y) {
+                    c = if x == gx || x == gx + 4 || y == gy + 7 {
+                        idx::TILE_DARK
+                    } else if x == gx + 1 {
+                        idx::WHITE
+                    } else {
+                        idx::TILE
+                    };
+                }
             }
             px(t, x, y, c);
         }

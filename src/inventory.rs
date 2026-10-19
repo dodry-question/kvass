@@ -31,7 +31,12 @@ pub struct Inventory {
     /// Склад: сколько «порций» сырья куплено и осталось.
     pub stock_croutons: u8,
     pub stock_sugar: u8,
+    /// Стаканы — многоразовые (ТЗ №8): пул = stock_glass + dirty_glasses
+    /// постоянно, после питья стакан становится грязным, мойка возвращает
+    /// его на склад. Покупать стаканы нельзя.
     pub stock_glass: u8,
+    /// Грязные стаканы, ждущие мойки (на краю прилавка/складе).
+    pub dirty_glasses: u8,
     pub stock_jar: u8,
     pub stock_bottle: u8,
 }
@@ -44,6 +49,7 @@ impl Default for Inventory {
             stock_croutons: 0,
             stock_sugar: 0,
             stock_glass: 0,
+            dirty_glasses: 0,
             stock_jar: 0,
             stock_bottle: 0,
         }

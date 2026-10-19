@@ -12,6 +12,7 @@ mod font;
 mod inventory;
 mod interact;
 mod map;
+mod modals;
 mod palette;
 mod player;
 mod raycaster;
@@ -48,12 +49,13 @@ struct World {
     flicker: f32,
 }
 
+/// Handles текстур экрана: мир 640×400 и UI-канвас 1280×800 (один ресурс,
+/// чтобы render_frame укладывался в лимит параметров Bevy).
 #[derive(Resource)]
-struct ScreenImage(Handle<Image>);
-
-/// RGBA-канвас UI (второй слой поверх мира).
-#[derive(Resource)]
-struct ScreenUi(Handle<Image>);
+struct ScreenImages {
+    world: Handle<Image>,
+    ui: Handle<Image>,
+}
 
 /// Каталог assets: рядом с exe, в текущей папке или в исходниках (dev-сборка).
 /// Настройка окна: полноэкранный borderless либо окно, если задана
@@ -143,6 +145,9 @@ fn main() {
                 }),
         )
         .insert_resource(ClearColor(Color::srgb(0.09, 0.07, 0.06)))
+        .init_resource::<modals::Modals>()
+        .init_resource::<interact::WashQte>()
+        .init_resource::<interact::CoolQte>()
         .add_systems(Startup, (setup, audio::load_bank).chain())
         .add_systems(
             Update,
@@ -164,17 +169,38 @@ fn main() {
                     interact::interact,
                     interact::fill_hold,
                     interact::brew_qte,
+                    interact::wash_qte,
+                    interact::cool_qte,
+                )
+                    .chain(),
+                (
                     audio::ambience,
                     audio::bubble_volume,
                     audio::footsteps,
                     audio::event_sounds,
                 )
                     .chain(),
+            )
+                .chain()
+                // ТЗ №3/№4: пока открыта модалка — мир заморожен.
+                .run_if(modal_closed),
+        )
+        .add_systems(
+            Update,
+            (
+                // модалки и доставка живут поверх замороженного мира
+                modals::modal_input,
+                modals::supply_tick,
                 render_frame,
                 fit_screen,
             ),
         )
         .run();
+}
+
+/// Игровой мир (движение, брожение, очередь) заморожен, пока открыта модалка.
+fn modal_closed(modal: Res<modals::Modals>) -> bool {
+    !modal.is_open()
 }
 
 fn in_play(state: Res<GameState>) -> bool {
@@ -201,12 +227,11 @@ fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
     // Квадрат экрана: растягивается ровно на всё окно (полноэкранный режим)
     image.sampler = ImageSampler::nearest();
     let handle = images.add(image);
-    commands.insert_resource(ScreenImage(handle.clone()));
 
     commands.spawn((
         ScreenQuad,
         Sprite {
-            image: handle,
+            image: handle.clone(),
             custom_size: Some(Vec2::new(SCREEN_W as f32 * 3.0, SCREEN_H as f32 * 3.0)),
             ..default()
         },
@@ -226,7 +251,10 @@ fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
     );
     ui_image.sampler = ImageSampler::nearest();
     let ui_handle = images.add(ui_image);
-    commands.insert_resource(ScreenUi(ui_handle.clone()));
+    commands.insert_resource(ScreenImages {
+        world: handle,
+        ui: ui_handle.clone(),
+    });
     commands.spawn((
         ScreenQuad,
         Sprite {
@@ -312,12 +340,14 @@ fn render_frame(
     inv: Res<Inventory>,
     barrels: Res<Barrels>,
     qte: Res<brewing::BrewQte>,
+    wash: Res<interact::WashQte>,
+    cool: Res<interact::CoolQte>,
+    modal: Res<modals::Modals>,
     customers: Query<&Customer>,
     mut world: ResMut<World>,
     mut ui_canvas: ResMut<Canvas>,
     mut images: ResMut<Assets<Image>>,
-    handle: Res<ScreenImage>,
-    ui_handle: Res<ScreenUi>,
+    screen: Res<ScreenImages>,
 ) {
     // мерцание люминесцентных ламп
     let t = time.elapsed_secs();
@@ -343,9 +373,14 @@ fn render_frame(
 
     // канвас UI (верхний слой)
     {
-        let custs: Vec<(Vec2, Option<String>)> = customers
+        let custs: Vec<ui::CustView> = customers
             .iter()
-            .map(|c| (c.pos, c.bubble.clone()))
+            .map(|c| ui::CustView {
+                pos: c.pos,
+                text: c.bubble.clone(),
+                order: c.order,
+                queued: c.state == customer::CustState::Queued,
+            })
             .collect();
         let World { font, .. } = &*world;
         ui_canvas.clear();
@@ -366,11 +401,14 @@ fn render_frame(
             &inv,
             &barrels,
             &qte,
+            &wash,
+            &cool,
             &custs,
             t,
             &cam,
             &map,
             moving,
+            &modal,
         );
     }
 
@@ -378,11 +416,11 @@ fn render_frame(
     if rendered {
         world.renderer.present();
         let rgba = world.renderer.rgba.clone();
-        if let Some(mut img) = images.get_mut(&handle.0) {
+        if let Some(mut img) = images.get_mut(&screen.world) {
             img.data = Some(rgba);
         }
     }
-    if let Some(mut img) = images.get_mut(&ui_handle.0) {
+    if let Some(mut img) = images.get_mut(&screen.ui) {
         img.data = Some(ui_canvas.px.clone());
     }
 }

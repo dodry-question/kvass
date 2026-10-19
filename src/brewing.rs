@@ -26,6 +26,9 @@ pub const PCT_OVERRIPE: f32 = 125.0;
 pub const PCT_RUINED: f32 = 150.0;
 /// Прибавка за попадание в зону мини-игры ускорения.
 pub const QTE_BONUS: f32 = 10.0;
+/// ТЗ §1: в критической зоне 100–150% брожение замедляется втрое (×0.33),
+/// чтобы у игрока был запас времени разлить готовый квас до переброда.
+pub const CRITICAL_RATE: f32 = 0.33;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum BarrelPhase {
@@ -211,7 +214,7 @@ pub fn barrel_update(
                 }
             }
             BarrelPhase::Ready(p) => {
-                *p += dt * (PCT_OVERRIPE - PCT_READY) / READY_WINDOW;
+                *p += dt * (PCT_OVERRIPE - PCT_READY) / READY_WINDOW * CRITICAL_RATE;
                 if *p >= PCT_OVERRIPE {
                     let q = *p;
                     b.phase = BarrelPhase::Overripe(q);
@@ -219,7 +222,7 @@ pub fn barrel_update(
                 }
             }
             BarrelPhase::Overripe(p) => {
-                *p += dt * (PCT_RUINED - PCT_OVERRIPE) / OVERRIPE_TIME;
+                *p += dt * (PCT_RUINED - PCT_OVERRIPE) / OVERRIPE_TIME * CRITICAL_RATE;
                 if *p >= PCT_RUINED {
                     b.phase = BarrelPhase::Ruined;
                     b.signal = Some(BarrelSignal::Ruined);
@@ -245,9 +248,11 @@ pub fn ferment_progress(b: &Barrel) -> Option<f32> {
 pub fn seconds_to_next(b: &Barrel) -> f32 {
     match b.phase {
         BarrelPhase::Ready(p) => ((PCT_OVERRIPE - p).max(0.0) / (PCT_OVERRIPE - PCT_READY))
-            * READY_WINDOW,
+            * READY_WINDOW
+            / CRITICAL_RATE,
         BarrelPhase::Overripe(p) => ((PCT_RUINED - p).max(0.0) / (PCT_RUINED - PCT_OVERRIPE))
-            * OVERRIPE_TIME,
+            * OVERRIPE_TIME
+            / CRITICAL_RATE,
         BarrelPhase::Ferment(p) => ((PCT_READY - p).max(0.0) / PCT_READY) * b.brew_time,
         _ => 0.0,
     }

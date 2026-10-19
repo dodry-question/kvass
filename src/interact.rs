@@ -8,14 +8,78 @@ use crate::customer::{CustState, Customer};
 use crate::day_cycle::{GameState, GameRng, Phase};
 use crate::inventory::{HandItem, Inventory};
 use crate::map::Tile;
+use crate::modals::{Modal, Modals};
 use crate::raycaster::GameCam;
-use crate::sprites::Vessel;
 
 /// Прогресс розлива/промывки бочки.
 #[derive(Resource, Default)]
 pub struct FillState {
     pub progress: f32,
     pub target: (i32, i32),
+}
+
+/// Мини-игра мытья стаканов (ТЗ №8): перевёрнутый стакан под струёй,
+/// 3 ритмичных нажатия ПРОБЕЛА в зоне смывают пену, «дзынь» — стакан
+/// уходит на склад чистым.
+#[derive(Resource, Default)]
+pub struct WashQte {
+    pub active: bool,
+    /// Позиция бегунка по полоске, 0..1.
+    pub pos: f32,
+    pub dir: f32,
+    /// Подсвеченная зона, 0..1.
+    pub zone0: f32,
+    pub zone1: f32,
+    /// Сколько смывов сделано из трёх.
+    pub hits: u8,
+    /// Защита от двойного срабатывания на одном нажатии.
+    pub lock: f32,
+    /// >0 — вспышка «попал», <0 — «мимо».
+    pub flash: f32,
+}
+
+impl WashQte {
+    pub fn roll_zone(&mut self, rng: &mut StdRng) {
+        let len = rng.random_range(0.12..0.18);
+        let s = rng.random_range(0.06..(0.94 - len));
+        self.zone0 = s;
+        self.zone1 = s + len;
+    }
+    pub fn reset(&mut self) {
+        self.active = false;
+        self.hits = 0;
+        self.flash = 0.0;
+    }
+}
+
+/// Мини-игра охлаждения перебродившей бочки (ТЗ №9): ведро ледяной воды,
+/// горизонтальная полоска с синей зоной. ПРОБЕЛ в зоне — температура
+/// падает, переброд −25% (130→105), ведро опустевает (набрать у колонки).
+#[derive(Resource, Default)]
+pub struct CoolQte {
+    pub active: bool,
+    pub pos: f32,
+    pub dir: f32,
+    pub zone0: f32,
+    pub zone1: f32,
+    pub barrel: Option<(i32, i32)>,
+    pub lock: f32,
+    /// >0 — вспышка «охладил», <0 — «мимо».
+    pub flash: f32,
+}
+
+impl CoolQte {
+    pub fn roll_zone(&mut self, rng: &mut StdRng) {
+        let len = rng.random_range(0.13..0.20);
+        let s = rng.random_range(0.06..(0.94 - len));
+        self.zone0 = s;
+        self.zone1 = s + len;
+    }
+    pub fn reset(&mut self) {
+        self.active = false;
+        self.barrel = None;
+        self.flash = 0.0;
+    }
 }
 
 fn front_tile(cam: &GameCam) -> (i32, i32) {
@@ -32,8 +96,10 @@ pub fn interact(
     mut inv: ResMut<Inventory>,
     mut barrels: ResMut<Barrels>,
     mut state: ResMut<GameState>,
+    mut modal: ResMut<Modals>,
+    mut wash: ResMut<WashQte>,
+    mut cool: ResMut<CoolQte>,
     mut customers: Query<(Entity, &mut Customer)>,
-    mut shelf_cycle: Local<usize>,
     mut game_rng: ResMut<GameRng>,
     mut commands: Commands,
     bank: Res<crate::audio::SoundBank>,
@@ -74,19 +140,33 @@ pub fn interact(
             }
         }
         Tile::Shelf => {
-            let Some(v) = inv.take_empty_from_stock(&mut shelf_cycle) else {
-                state.notify("ПОСУДА КОНЧИЛАСЬ! ЗАКУПИТЕ (3) НА СКЛАДЕ ЗАВТРА".into());
-                return;
-            };
-            if inv.put(HandItem::Empty(v, 1)) {
-                state.notify(format!("ВЗЯТ ПУСТЫЙ {}", v.name()));
+            // ТЗ №4: паузим мир и открываем модалку выбора посуды.
+            modal.modal = Modal::VesselPick;
+            state.notify("СТЕЛЛАЖ ПОСУДЫ: [1] СТАКАН [2] БАНКА [3] БУТЫЛКА".into());
+        }
+        Tile::Supply => {
+            // ТЗ №3: окно снабжения — закупка с доставкой через 3–5 сек.
+            modal.modal = Modal::Supply;
+            state.notify("ОКНО СНАБЖЕНИЯ: [1] СУХАРИ [2] САХАР [3] БАНКИ [4] БУТЫЛКИ".into());
+        }
+        Tile::Sink => {
+            if inv.dirty_glasses == 0 {
+                state.notify("ГРЯЗНЫХ СТАКАНОВ НЕТ — МОЙКА ЧИСТА".into());
+            } else if wash.active {
+                // повторное E — сброс мини-игры
+                wash.reset();
             } else {
-                match v {
-                    Vessel::Glass => inv.stock_glass += 1,
-                    Vessel::Jar => inv.stock_jar += 1,
-                    Vessel::Bottle => inv.stock_bottle += 1,
-                }
-                state.notify("РУКИ ЗАНЯТЫ".into());
+                wash.active = true;
+                wash.pos = 0.0;
+                wash.dir = 1.0;
+                wash.hits = 0;
+                wash.lock = 0.25;
+                wash.roll_zone(rng);
+                crate::audio::play_sfx(&mut commands, &bank, "water", 0.6);
+                state.notify(format!(
+                    "СМЫВАЙТЕ ПЕНУ: 3 РАЗА ПРОБЕЛ В ЗОНУ (ГРЯЗНЫХ: {})",
+                    inv.dirty_glasses
+                ));
             }
         }
         Tile::Barrel => {
@@ -147,11 +227,30 @@ pub fn interact(
                         ));
                     }
                 }
-                BarrelPhase::Overripe(_) => {
-                    state.notify(format!(
-                        "ПЕРЕБРОД! РАЗЛИВАЙТЕ, ЧТО ЕСТЬ ({:.0} СЕК)",
-                        crate::brewing::seconds_to_next(b)
-                    ));
+                BarrelPhase::Overripe(p) => {
+                    // ТЗ №9: переброд можно спасти ведром ледяной воды.
+                    if inv.has_bucket() {
+                        if cool.active && cool.barrel == Some((tx, ty)) {
+                            cool.reset();
+                        } else {
+                            cool.active = true;
+                            cool.pos = if rng.random_bool(0.5) { 0.0 } else { 1.0 };
+                            cool.dir = if cool.pos == 0.0 { 1.0 } else { -1.0 };
+                            cool.barrel = Some((tx, ty));
+                            cool.lock = 0.25;
+                            cool.roll_zone(rng);
+                            crate::audio::play_sfx(&mut commands, &bank, "water", 0.6);
+                            state.notify(format!(
+                                "ПЕРЕБРОД {}% — ПРОБЕЛ В СИНЮЮ ЗОНУ (ВЕДРО ЛЬЁТСЯ)",
+                                p as i32
+                            ));
+                        }
+                    } else {
+                        state.notify(format!(
+                            "ПЕРЕБРОД {}%! НУЖНО ВЕДРО ЛЕДЯНОЙ ВОДЫ — КОЛОНКА (E)",
+                            p as i32
+                        ));
+                    }
                 }
                 BarrelPhase::Ruined => {
                     state.notify("ИСПОРЧЕНА. ДЕРЖИТЕ E — ПОМЫТЬ".into());
@@ -165,7 +264,8 @@ pub fn interact(
             let target = Vec2::new(fx, fy);
             let mut best: Option<(Entity, f32)> = None;
             for (e, c) in customers.iter() {
-                if c.state != CustState::Queued {
+                // ТЗ №6: обслуживается только ПЕРВЫЙ в очереди (spot 0).
+                if c.state != CustState::Queued || c.spot != 0 {
                     continue;
                 }
                 let d = c.pos.distance(target);
@@ -413,6 +513,166 @@ pub fn brew_qte(
             crate::audio::play_sfx(&mut commands, &bank, "water", 0.4);
             state.notify("МИМО! ПОДОЖДИТЕ БЕГУНКА В ЗОНЕ".into());
             state.face_set(2, 1.5); // морщится: мимо
+        }
+    }
+}
+
+/// Мини-игра мытья стаканов (ТЗ №8): 3 ритмичных нажатия ПРОБЕЛ в зону
+/// смывают пену, «дзынь» — стакан уходит на склад чистым.
+pub fn wash_qte(
+    time: Res<Time>,
+    keys: Res<ButtonInput<KeyCode>>,
+    cam: Res<GameCam>,
+    map: Res<crate::map::Map>,
+    mut inv: ResMut<Inventory>,
+    mut state: ResMut<GameState>,
+    mut wash: ResMut<WashQte>,
+    mut game_rng: ResMut<GameRng>,
+    mut commands: Commands,
+    bank: Res<crate::audio::SoundBank>,
+) {
+    let dt = time.delta_secs();
+    wash.flash = if wash.flash > 0.0 {
+        (wash.flash - dt).max(0.0)
+    } else {
+        (wash.flash + dt).min(0.0)
+    };
+    wash.lock = (wash.lock - dt).max(0.0);
+    if !wash.active {
+        return;
+    }
+    if !matches!(state.phase, Phase::Playing | Phase::Tutorial) {
+        wash.reset();
+        return;
+    }
+    let (tx, ty) = front_tile(&cam);
+    if map.get(tx, ty) != Tile::Sink || inv.dirty_glasses == 0 {
+        wash.reset();
+        return;
+    }
+
+    let prev = wash.pos;
+    wash.pos += wash.dir * 0.55 * dt;
+    if wash.pos >= 1.0 {
+        wash.pos = 1.0;
+        wash.dir = -1.0;
+    } else if wash.pos <= 0.0 {
+        wash.pos = 0.0;
+        wash.dir = 1.0;
+    }
+
+    if keys.just_pressed(KeyCode::Space) && wash.lock <= 0.0 {
+        wash.lock = 0.2;
+        let margin = 0.015;
+        let (a, b) = (prev.min(wash.pos), prev.max(wash.pos));
+        let hit = b >= wash.zone0 - margin && a <= wash.zone1 + margin;
+        if hit {
+            wash.hits += 1;
+            if wash.hits >= 3 {
+                // «дзынь» — чистый стакан сразу на склад
+                inv.dirty_glasses = inv.dirty_glasses.saturating_sub(1);
+                inv.stock_glass += 1;
+                wash.reset();
+                wash.flash = 0.5;
+                crate::audio::play_sfx(&mut commands, &bank, "ding", 0.7);
+                state.notify(format!(
+                    "ДЗЫНЬ! СТАКАН ЧИСТЫЙ НА СКЛАДЕ (ГРЯЗНЫХ: {})",
+                    inv.dirty_glasses
+                ));
+                state.face_set(1, 1.0);
+            } else {
+                wash.flash = 0.3;
+                wash.roll_zone(&mut game_rng.0);
+                crate::audio::play_sfx(&mut commands, &bank, "water", 0.5);
+                state.notify(format!("ПЕНА СМЫТА: {} ИЗ 3", wash.hits));
+            }
+        } else {
+            wash.flash = -0.25;
+            crate::audio::play_sfx(&mut commands, &bank, "water", 0.35);
+            state.notify("МИМО! ПРОБЕЛ, КОГДА БЕГУНК В СИНЕЙ ЗОНЕ".into());
+        }
+    }
+}
+
+/// Мини-игра охлаждения перебродившей бочки (ТЗ №9): ПРОБЕЛ в синей зоне
+/// льёт ледяную воду — переброд −25%, ведро опустевает.
+pub fn cool_qte(
+    time: Res<Time>,
+    keys: Res<ButtonInput<KeyCode>>,
+    cam: Res<GameCam>,
+    map: Res<crate::map::Map>,
+    mut inv: ResMut<Inventory>,
+    mut barrels: ResMut<Barrels>,
+    mut state: ResMut<GameState>,
+    mut cool: ResMut<CoolQte>,
+    mut commands: Commands,
+    bank: Res<crate::audio::SoundBank>,
+) {
+    let dt = time.delta_secs();
+    cool.flash = if cool.flash > 0.0 {
+        (cool.flash - dt).max(0.0)
+    } else {
+        (cool.flash + dt).min(0.0)
+    };
+    cool.lock = (cool.lock - dt).max(0.0);
+    if !cool.active {
+        return;
+    }
+    if state.phase != Phase::Playing {
+        cool.reset();
+        return;
+    }
+    let (tx, ty) = front_tile(&cam);
+    let still = cool.barrel == Some((tx, ty))
+        && map.get(tx, ty) == Tile::Barrel
+        && inv.has_bucket()
+        && barrels
+            .map
+            .get(&(tx, ty))
+            .map(|b| matches!(b.phase, BarrelPhase::Overripe(_)))
+            .unwrap_or(false);
+    if !still {
+        cool.reset();
+        return;
+    }
+
+    let prev = cool.pos;
+    cool.pos += cool.dir * 0.5 * dt;
+    if cool.pos >= 1.0 {
+        cool.pos = 1.0;
+        cool.dir = -1.0;
+    } else if cool.pos <= 0.0 {
+        cool.pos = 0.0;
+        cool.dir = 1.0;
+    }
+
+    if keys.just_pressed(KeyCode::Space) && cool.lock <= 0.0 {
+        cool.lock = 0.2;
+        let margin = 0.015;
+        let (a, b) = (prev.min(cool.pos), prev.max(cool.pos));
+        let hit = b >= cool.zone0 - margin && a <= cool.zone1 + margin;
+        if hit {
+            if let Some(b) = barrels.mutable_at(tx, ty) {
+                if let BarrelPhase::Overripe(p) = b.phase {
+                    let np = p - 25.0;
+                    b.phase = if np < crate::brewing::PCT_OVERRIPE {
+                        BarrelPhase::Ready(np)
+                    } else {
+                        BarrelPhase::Overripe(np)
+                    };
+                }
+            }
+            inv.drain_bucket();
+            cool.reset();
+            cool.flash = 0.5;
+            crate::audio::play_sfx(&mut commands, &bank, "ding", 0.7);
+            state.notify("БОЧКА ОХЛАЖДЕНА (−25%). ВЕДРО ПУСТОЕ — КОЛОНКА (E)".into());
+            state.face_set(1, 1.2);
+        } else {
+            cool.flash = -0.25;
+            crate::audio::play_sfx(&mut commands, &bank, "water", 0.4);
+            state.notify("МИМО! ПРОБЕЛ, КОГДА БЕГУНК В СИНЕЙ ЗОНЕ".into());
+            state.face_set(2, 1.5);
         }
     }
 }

@@ -50,23 +50,24 @@ pub fn enemies_spawn(
 }
 
 fn spawn_official(commands: &mut Commands, kind: NpcKind, rng: &mut StdRng) -> Option<usize> {
-    // точка 3 ближе к двери
+    // последнее место очереди — ближе к двери
+    let spot = QUEUE_SPOTS.len() - 1;
     let c = Customer {
         kind,
         order: crate::sprites::Vessel::Jar,
         state: CustState::Entering,
         pos: crate::customer::DOOR,
-        path: VecDeque::from([Vec2::new(QUEUE_SPOTS[3].0, QUEUE_SPOTS[3].1)]),
+        path: VecDeque::from([Vec2::new(QUEUE_SPOTS[spot].0, QUEUE_SPOTS[spot].1)]),
         patience: 80.0,
         max_patience: 80.0,
         bubble: None,
         bubble_t: 0.0,
-        spot: 3,
+        spot,
         served: false,
         step_t: 0.0,
     };
     commands.spawn((c, Official));
-    Some(3)
+    Some(spot)
 }
 
 /// Штраф, если проверяющий ушёл с пустыми руками.

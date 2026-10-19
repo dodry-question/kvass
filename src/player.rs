@@ -10,6 +10,9 @@ pub const SPEED: f32 = 3.0;
 pub const TURN_SPEED: f32 = 2.5;
 pub const MOUSE_SENS: f32 = 0.0025;
 pub const RADIUS: f32 = 0.25;
+/// ТЗ №7: отступ игрока от прилавка — не ближе ~0.55 юнита, иначе игрок
+/// «заглядывает» в текстуру прилавка и видит сквозь неё.
+pub const COUNTER_STANDOFF: f32 = 4.55;
 
 pub fn movement(
     time: Res<Time>,
@@ -58,6 +61,10 @@ pub fn movement(
 }
 
 fn blocked(map: &Map, x: f32, y: f32) -> bool {
+    // зона отступа перед прилавком (x 3..8, подход с юга): ТЗ №7
+    if (2.9..9.1).contains(&x) && y >= 4.0 && y < COUNTER_STANDOFF {
+        return true;
+    }
     for (ox, oy) in [(-RADIUS, -RADIUS), (RADIUS, -RADIUS), (-RADIUS, RADIUS), (RADIUS, RADIUS)] {
         if map.get((x + ox).floor() as i32, (y + oy).floor() as i32).solid() {
             return true;

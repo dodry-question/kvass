@@ -23,6 +23,10 @@ pub enum Tile {
     Sugar,
     /// Колонка с водой.
     Water,
+    /// Окно снабжения (закупка товара, ТЗ №3).
+    Supply,
+    /// Мойка посуды (мини-грамота мытья стаканов, ТЗ №8).
+    Sink,
     /// Дверной проём (проходимый, видна улица за ним).
     Doorway,
 }
@@ -47,6 +51,8 @@ impl Tile {
             Tile::Croutons => TexId::CroutonsShelf,
             Tile::Sugar => TexId::SugarShelf,
             Tile::Water => TexId::WaterTap,
+            Tile::Supply => TexId::Supply,
+            Tile::Sink => TexId::Sink,
             Tile::Doorway => TexId::Outside,
             Tile::Floor => return None,
         })
@@ -66,11 +72,12 @@ impl Map {
     /// ```text
     /// #....DD....#   D — дверь (5,0)(6,0)
     /// #..........#
-    /// #..........#   очередь y=2.4 (3.5 / 5.5 / 7.5 / 9.5)
+    /// #S.........#   S — мойка (2,3); очередь y=2.7 (5.5 / 5.5,1.7 / 5.5,0.7)
     /// #..CCCCCC..#   прилавок x3..8, y3
     /// #B.........#   бочки (1,4) (1,5) (1,6) — подход с востока
     /// #B.........#
-    /// #B.CCWS.SS.#   сухари 3-4, сахар 5, вода 6, посуда 8-9  (y=6)
+    /// #B.CCWSOS.S#   сухари 3-4, сахар 5, вода 6, окно снабжения 7,
+    ///               посуда 8-9 (y=6)
     /// #..........#   южная стена y=7
     /// ```
     pub fn shop() -> Self {
@@ -104,6 +111,9 @@ impl Map {
         m.set(6, 6, Tile::Water);
         m.set(8, 6, Tile::Shelf);
         m.set(9, 6, Tile::Shelf);
+        // Окно снабжения (ТЗ №3) и мойка посуды (ТЗ №8).
+        m.set(7, 6, Tile::Supply);
+        m.set(2, 3, Tile::Sink);
         m
     }
 

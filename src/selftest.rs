@@ -1,4 +1,4 @@
-//! Оффскрин-самотест: рисует кадры всех экранов в BMP-файлы и выходит.
+//! Оффскрин-самотест: рисует кадры всех экранов в BMP/PNG-файлы и выходит.
 //! Запуск: `cargo run -- --selftest`. Файлы в `selftest_out/`.
 //!
 //! Кадр = мир 640×400 (×2) + канвас UI 1280×800 поверх (альфа-композиция),
@@ -14,11 +14,23 @@ use crate::canvas::{Canvas, CV_H, CV_W};
 use crate::day_cycle::{GameState, Phase, PAUSE_FROM_PLAYING, norm_for};
 use crate::font::{Font, SZ_L, SZ_M, SZ_S};
 use crate::inventory::{HandItem, Inventory};
+use crate::interact::{CoolQte, WashQte};
 use crate::map::Map;
+use crate::modals::{Delivery, Modal, Modals, SupplyKind};
 use crate::raycaster::{GameCam, Renderer, SCREEN_H, SCREEN_W};
 use crate::sprites::{NpcKind, SpriteSheet, Vessel};
 use crate::textures::Textures;
 use crate::ui;
+
+/// Облачко/иконка заказа для UI (как в игре собирает render_frame).
+fn cv(x: f32, y: f32, text: Option<&str>, order: Vessel, queued: bool) -> ui::CustView {
+    ui::CustView {
+        pos: Vec2::new(x, y),
+        text: text.map(|s| s.to_string()),
+        order,
+        queued,
+    }
+}
 
 pub fn run() {
     let out = Path::new("selftest_out");
@@ -33,7 +45,7 @@ pub fn run() {
         font.line(SZ_M),
         font.cap_h(SZ_M),
         font.w("КВАСНАЯ ЛАВКА", 64),
-        font.w("ШАГ 4/7. К БОЧКЕ: E ТРИЖДЫ (СУХАРИ-ВОДА-САХАР)", SZ_M),
+        font.w("ШАГ 4/8. К БОЧКЕ: E ТРИЖДЫ (СУХАРИ-ВОДА-САХАР)", SZ_M),
     );
     let mut renderer = Renderer::new();
     let mut canvas = Canvas::new();
@@ -43,7 +55,10 @@ pub fn run() {
         angle: -std::f32::consts::FRAC_PI_2 - 0.4,
     };
     let no_qte = BrewQte::default();
-    let no_cust: Vec<(Vec2, Option<String>)> = Vec::new();
+    let no_wash = WashQte::default();
+    let no_cool = CoolQte::default();
+    let no_modal = Modals::default();
+    let no_cust: Vec<ui::CustView> = Vec::new();
     let empty_inv = Inventory::default();
 
     //snap: композиция кадра и запись
@@ -62,37 +77,118 @@ pub fn run() {
     };
     canvas.clear();
     ui::draw_frame(
-        &mut canvas, &font, &state, &empty_inv, &Barrels::from_map(&map),
-        &no_qte, &no_cust, 1.0, &cam, &map, false,
+        &mut canvas,
+        &font,
+        &state,
+        &empty_inv,
+        &Barrels::from_map(&map),
+        &no_qte,
+        &no_wash,
+        &no_cool,
+        &no_cust,
+        1.0,
+        &cam,
+        &map,
+        false,
+        &no_modal,
     );
     snap(&canvas, None, "1_menu.bmp");
 
-    // --- 2. Склад (закупка) ---
+    // --- 2. Окно снабжения (ТЗ №3): модалка поверх приглушённого мира ---
     let inv = Inventory {
         hands: [None; 4],
         selected: 0,
         stock_croutons: 2,
         stock_sugar: 2,
-        stock_glass: 4,
+        stock_glass: 6,
+        dirty_glasses: 1,
         stock_jar: 2,
         stock_bottle: 1,
     };
     let state = GameState {
-        phase: Phase::Shopping,
+        phase: Phase::Playing,
+        day: 2,
         money: 45,
-        norm: norm_for(1),
-        msg: "КУПЛЕНО: ПОСУДА (4+4+4) -15 К.".into(),
+        norm: norm_for(2),
+        msg: "ЗАКАЗ ПРИНЯТ: СУХАРИ — ПРИВЕЗУТ ЧЕРЕЗ 3-5 СЕК".into(),
         msg_t: 3.0,
+        ..Default::default()
+    };
+    let supply_modal = Modals {
+        modal: Modal::Supply,
+        pending: vec![
+            Delivery {
+                kind: SupplyKind::Croutons,
+                t: 3.4,
+            },
+            Delivery {
+                kind: SupplyKind::Jar,
+                t: 1.2,
+            },
+        ],
+    };
+    let custs = vec![
+        cv(
+            5.5,
+            2.7,
+            Some("Дай, внучек, стаканчик квасика, холодненький..."),
+            Vessel::Glass,
+            true,
+        ),
+        cv(5.5, 1.7, None, Vessel::Jar, true),
+    ];
+    renderer.render(&map, &textures, &cam, 1.0);
+    let sprite_list: Vec<(Vec2, NpcKind)> = vec![
+        (Vec2::new(5.5, 2.7), NpcKind::Grandma),
+        (Vec2::new(5.5, 1.7), NpcKind::Worker),
+    ];
+    renderer.draw_sprites(&sprites, &sprite_list, &cam, 1.0);
+    renderer.present();
+    let world_a = renderer.rgba.clone();
+    canvas.clear();
+    ui::draw_frame(
+        &mut canvas,
+        &font,
+        &state,
+        &inv,
+        &Barrels::from_map(&map),
+        &no_qte,
+        &no_wash,
+        &no_cool,
+        &custs,
+        2.0,
+        &cam,
+        &map,
+        false,
+        &supply_modal,
+    );
+    snap(&canvas, Some(&world_a), "2_supply.bmp");
+
+    // --- 3. Стеллаж посуды (ТЗ №4): выбор посуды цифрами ---
+    let pick_modal = Modals {
+        modal: Modal::VesselPick,
         ..Default::default()
     };
     canvas.clear();
     ui::draw_frame(
-        &mut canvas, &font, &state, &inv, &Barrels::from_map(&map),
-        &no_qte, &no_cust, 2.0, &cam, &map, false,
+        &mut canvas,
+        &font,
+        &state,
+        &inv,
+        &Barrels::from_map(&map),
+        &no_qte,
+        &no_wash,
+        &no_cool,
+        &custs,
+        2.4,
+        &cam,
+        &map,
+        false,
+        &pick_modal,
     );
-    snap(&canvas, None, "2_shopping.bmp");
+    snap(&canvas, Some(&world_a), "3_vesselpick.bmp");
 
-    // --- 3. Игровой день: мир + HUD + диалоги ---
+    // --- 4. Игровой день: мир + HUD + диалоги + иконка заказа (ТЗ №5) ---
     let mut barrels = Barrels::from_map(&map);
     let mut keys: Vec<(i32, i32)> = barrels.map.keys().copied().collect();
     keys.sort();
@@ -122,7 +218,8 @@ pub fn run() {
         selected: 1,
         stock_croutons: 2,
         stock_sugar: 2,
-        stock_glass: 4,
+        stock_glass: 5,
+        dirty_glasses: 2,
         stock_jar: 2,
         stock_bottle: 1,
     };
@@ -133,33 +230,54 @@ pub fn run() {
         norm: norm_for(2),
         day_earned: 60,
         time_left: 137.0,
-        msg: "СУХАРИ КОНЧИЛИСЬ — КУПИТЕ (1) НА СКЛАДЕ".into(),
+        msg: "СУХАРИ КОНЧИЛИСЬ — КУПИТЕ (1) У ОКНА СНАБЖЕНИЯ".into(),
         msg_t: 3.0,
         ..Default::default()
     };
     let custs = vec![
-        (
-            Vec2::new(3.5, 2.7),
-            Some("Дай, внучек, стаканчик квасика, холодненький...".into()),
+        cv(
+            5.5,
+            2.7,
+            Some("Дай, внучек, стаканчик квасика, холодненький..."),
+            Vessel::Glass,
+            true,
         ),
-        (
-            Vec2::new(5.5, 2.7),
-            Some("Стакан, но погуще, а то опять водица.".into()),
+        cv(
+            5.5,
+            1.7,
+            Some("Стакан, но погуще, а то опять водица."),
+            Vessel::Glass,
+            true,
         ),
     ];
     renderer.render(&map, &textures, &cam, 1.0);
     let sprite_list: Vec<(Vec2, NpcKind)> = vec![
-        (Vec2::new(3.5, 2.7), NpcKind::Grandma),
-        (Vec2::new(5.5, 2.7), NpcKind::Worker),
+        (Vec2::new(5.5, 2.7), NpcKind::Grandma),
+        (Vec2::new(5.5, 1.7), NpcKind::Worker),
     ];
     renderer.draw_sprites(&sprites, &sprite_list, &cam, 1.0);
     renderer.present();
-    let world_a = renderer.rgba.clone();
+    let world_b = renderer.rgba.clone();
     canvas.clear();
-    ui::draw_frame(&mut canvas, &font, &state, &inv, &barrels, &no_qte, &custs, 3.5, &cam, &map, false);
-    snap(&canvas, Some(&world_a), "3_playing.bmp");
+    ui::draw_frame(
+        &mut canvas,
+        &font,
+        &state,
+        &inv,
+        &barrels,
+        &no_qte,
+        &no_wash,
+        &no_cool,
+        &custs,
+        3.5,
+        &cam,
+        &map,
+        false,
+        &no_modal,
+    );
+    snap(&canvas, Some(&world_b), "4_playing.bmp");
 
-    // --- 4. Итоги дня ---
+    // --- 5. Итоги дня ---
     let state = GameState {
         phase: Phase::DayEnd,
         day: 2,
@@ -173,24 +291,48 @@ pub fn run() {
     };
     canvas.clear();
     ui::draw_frame(
-        &mut canvas, &font, &state, &inv, &Barrels::from_map(&map),
-        &no_qte, &no_cust, 4.0, &cam, &map, false,
+        &mut canvas,
+        &font,
+        &state,
+        &inv,
+        &Barrels::from_map(&map),
+        &no_qte,
+        &no_wash,
+        &no_cool,
+        &no_cust,
+        4.0,
+        &cam,
+        &map,
+        false,
+        &no_modal,
     );
-    snap(&canvas, None, "4_dayend.bmp");
+    snap(&canvas, None, "5_dayend.bmp");
 
-    // --- 5. Финал ---
+    // --- 6. Финал ---
     let state = GameState {
         phase: Phase::Final,
         ..Default::default()
     };
     canvas.clear();
     ui::draw_frame(
-        &mut canvas, &font, &state, &inv, &Barrels::from_map(&map),
-        &no_qte, &no_cust, 5.0, &cam, &map, false,
+        &mut canvas,
+        &font,
+        &state,
+        &inv,
+        &Barrels::from_map(&map),
+        &no_qte,
+        &no_wash,
+        &no_cool,
+        &no_cust,
+        5.0,
+        &cam,
+        &map,
+        false,
+        &no_modal,
     );
-    snap(&canvas, None, "5_final.bmp");
+    snap(&canvas, None, "6_final.bmp");
 
-    // --- 6. Шрифт: кегли и образцы реальных строк ---
+    // --- 7. Шрифт: кегли и образцы реальных строк ---
     canvas.clear();
     canvas.rect(0, 0, CV_W, CV_H, [36, 30, 22], 255);
     let rows: [(&str, usize); 8] = [
@@ -209,43 +351,65 @@ pub fn run() {
         ry += font.line(s) + 14;
     }
     for s in [
-        "ШАГ 4/7. К БОЧКЕ: E ТРИЖДЫ (СУХАРИ-ВОДА-САХАР)",
-        "НАЧАЛО: ЗАКУПИТЕ СУХАРИ (1), САХАР (2) И ПОСУДУ (3) - ИЛИ СРАЗУ ЖМИТЕ ENTER",
-        "СУХАРИ КОНЧИЛИСЬ — КУПИТЕ (1) НА СКЛАДЕ",
+        "ШАГ 5/8. НАЖИМАЙТЕ ПРОБЕЛ В ЗОНУ БЕГУНКА",
+        "ОКНО СНАБЖЕНИЯ: [1] СУХАРИ [2] САХАР [3] БАНКИ [4] БУТЫЛКИ",
+        "СУХАРИ КОНЧИЛИСЬ — КУПИТЕ (1) У ОКНА СНАБЖЕНИЯ",
         "ПРИЛАВОК - ОТДАТЬ КВАС ПОКУПАТЕЛЮ",
         "Б2 ГОТОВА 13/20 12С",
         "Дай, внучек, стаканчик квасика, холодненький...",
     ] {
         println!("font.w({s:?}) = {} px", font.w(s, SZ_M));
     }
-    let long = "НАЧАЛО: ЗАКУПИТЕ СУХАРИ (1), САХАР (2) И ПОСУДУ (3) - ИЛИ СРАЗУ ЖМИТЕ ENTER";
+    let long = "ОКНО СНАБЖЕНИЯ: [1] СУХАРИ [2] САХАР [3] БАНКИ [4] БУТЫЛКИ";
     let fitted = font.fit(long, CV_W - 48, SZ_L);
     println!(
         "font.fit(длинная, 1232, 30) = {fitted} (тогда ширина {})",
         font.w(long, fitted)
     );
-    snap(&canvas, None, "6_font.bmp");
+    snap(&canvas, None, "7_font.bmp");
 
-    // --- 7. Обучение: панель инструкции + мигающий маркер ---
+    // --- 8. Обучение: шаг 5 (ТЗ №2) — ПРОБЕЛ в зону бегунка ---
     let state = GameState {
         phase: Phase::Tutorial,
-        tut_step: 6,
+        tut_step: 4,
         msg: "ТАК ДЕРЖАТЬ!".into(),
         msg_t: 3.0,
         ..Default::default()
     };
-    let tut_cust = vec![(Vec2::new(3.5, 2.7), None)];
+    let tut_cust: Vec<ui::CustView> = Vec::new();
+    let tut_qte = BrewQte {
+        active: true,
+        pos: 0.47,
+        dir: 1.0,
+        zone0: 0.40,
+        zone1: 0.53,
+        barrel: Some(keys[1]),
+        lock: 0.0,
+        flash: 0.0,
+    };
     renderer.render(&map, &textures, &cam, 1.0);
-    renderer.draw_sprites(&sprites, &[(Vec2::new(3.5, 2.7), NpcKind::Grandma)], &cam, 1.0);
     renderer.present();
-    let world_b = renderer.rgba.clone();
+    let world_tut = renderer.rgba.clone();
     canvas.clear();
     ui::draw_frame(
-        &mut canvas, &font, &state, &inv, &barrels, &no_qte, &tut_cust, 1.5, &cam, &map, false,
+        &mut canvas,
+        &font,
+        &state,
+        &inv,
+        &barrels,
+        &tut_qte,
+        &no_wash,
+        &no_cool,
+        &tut_cust,
+        1.5,
+        &cam,
+        &map,
+        false,
+        &no_modal,
     );
-    snap(&canvas, Some(&world_b), "7_tutorial.bmp");
+    snap(&canvas, Some(&world_tut), "8_tutorial.bmp");
 
-    // --- 8. Лист персонажей (проверка образов NPC) ---
+    // --- 9. Лист персонажей (проверка образов NPC) ---
     canvas.clear();
     canvas.rect(0, 0, CV_W, CV_H, [36, 30, 22], 255);
     {
@@ -283,31 +447,34 @@ pub fn run() {
             255,
         );
     }
-    snap(&canvas, None, "8_npcs.bmp");
+    snap(&canvas, None, "9_npcs.bmp");
 
-    // --- 9. Только мир + спрайты (без HUD) — проверка видимости людей ---
+    // --- 10. Только мир + спрайты (без HUD) — очередь линией у прилавка ---
     renderer.render(&map, &textures, &cam, 1.0);
     renderer.draw_sprites(
         &sprites,
-        &[(Vec2::new(3.5, 2.7), NpcKind::Grandma), (Vec2::new(5.5, 2.7), NpcKind::Worker)],
+        &[
+            (Vec2::new(5.5, 2.7), NpcKind::Grandma),
+            (Vec2::new(5.5, 1.7), NpcKind::Worker),
+        ],
         &cam,
         1.0,
     );
     renderer.present();
-    write_bmp_world(&out.join("9_spriteonly.bmp"), &renderer.rgba);
+    write_bmp_world(&out.join("10_spriteonly.bmp"), &renderer.rgba);
 
-    // --- 10. Камера вплотную к прилавку — проверка масштаба людей ---
+    // --- 11. Камера на отступе от прилавка (ТЗ №7) ---
     let close_cam = GameCam {
         x: 5.5,
-        y: 4.15,
+        y: 4.6,
         angle: -std::f32::consts::FRAC_PI_2,
     };
     renderer.render(&map, &textures, &close_cam, 1.0);
-    renderer.draw_sprites(&sprites, &[(Vec2::new(3.5, 2.7), NpcKind::Grandma)], &close_cam, 1.0);
+    renderer.draw_sprites(&sprites, &[(Vec2::new(5.5, 2.7), NpcKind::Grandma)], &close_cam, 1.0);
     renderer.present();
-    write_bmp_world(&out.join("10_close.bmp"), &renderer.rgba);
+    write_bmp_world(&out.join("11_close.bmp"), &renderer.rgba);
 
-    // --- 11. Камера вплотную к обычной стене ---
+    // --- 12. Камера вплотную к обычной стене ---
     let wall_cam = GameCam {
         x: 1.3,
         y: 4.0,
@@ -315,9 +482,9 @@ pub fn run() {
     };
     renderer.render(&map, &textures, &wall_cam, 1.0);
     renderer.present();
-    write_bmp_world(&out.join("11_wallclose.bmp"), &renderer.rgba);
+    write_bmp_world(&out.join("12_wallclose.bmp"), &renderer.rgba);
 
-    // --- 12. Полоска ускорения брожения (мини-игра на ПРОБЕЛЕ) ---
+    // --- 13. Полоска ускорения брожения (мини-игра на ПРОБЕЛЕ) ---
     let qte = BrewQte {
         active: true,
         pos: 0.48,
@@ -345,10 +512,17 @@ pub fn run() {
         stock_croutons: 2,
         stock_sugar: 1,
         stock_glass: 4,
+        dirty_glasses: 0,
         stock_jar: 2,
         stock_bottle: 1,
     };
-    let qte_cust = vec![(Vec2::new(5.5, 2.7), Some("Ну и как там, бродит?".into()))];
+    let qte_cust = vec![cv(
+        5.5,
+        2.7,
+        Some("Ну и как там, бродит?"),
+        Vessel::Glass,
+        true,
+    )];
     renderer.render(&map, &textures, &cam, 1.0);
     renderer.draw_sprites(&sprites, &[(Vec2::new(5.5, 2.7), NpcKind::Worker)], &cam, 1.0);
     renderer.present();
@@ -361,14 +535,105 @@ pub fn run() {
         &qte_inv,
         &barrels,
         &qte,
+        &no_wash,
+        &no_cool,
         &qte_cust,
         6.0,
         &cam,
-        &map, false,
+        &map,
+        false,
+        &no_modal,
     );
-    snap(&canvas, Some(&world_c), "12_qte.bmp");
+    snap(&canvas, Some(&world_c), "13_qte.bmp");
 
-    // --- 13. Пауза (ESC): меню поверх приглушенного мира ---
+    // --- 14. Мытьё стаканов (ТЗ №8): полоска давления, 1/3 ---
+    let wash = WashQte {
+        active: true,
+        pos: 0.52,
+        dir: -1.0,
+        zone0: 0.44,
+        zone1: 0.58,
+        hits: 1,
+        lock: 0.0,
+        flash: 0.0,
+    };
+    let wash_state = GameState {
+        phase: Phase::Playing,
+        day: 2,
+        money: 30,
+        norm: norm_for(2),
+        day_earned: 40,
+        time_left: 200.0,
+        msg: "СМЫВАЙТЕ ПЕНУ: 3 РАЗА ПРОБЕЛ В ЗОНУ (ГРЯЗНЫХ: 2)".into(),
+        msg_t: 3.0,
+        ..Default::default()
+    };
+    canvas.clear();
+    ui::draw_frame(
+        &mut canvas,
+        &font,
+        &wash_state,
+        &inv,
+        &barrels,
+        &no_qte,
+        &wash,
+        &no_cool,
+        &no_cust,
+        6.4,
+        &cam,
+        &map,
+        false,
+        &no_modal,
+    );
+    snap(&canvas, Some(&world_c), "14_washqte.bmp");
+
+    // --- 15. Охлаждение перебродившей бочки (ТЗ №9): синяя зона ---
+    let mut cool_barrels = Barrels::from_map(&map);
+    if let Some(b) = cool_barrels.map.get_mut(&keys[1]) {
+        b.phase = BarrelPhase::Overripe(130.0);
+        b.portions = 20;
+    }
+    let cool = CoolQte {
+        active: true,
+        pos: 0.49,
+        dir: 1.0,
+        zone0: 0.38,
+        zone1: 0.52,
+        barrel: Some(keys[1]),
+        lock: 0.0,
+        flash: 0.0,
+    };
+    let cool_state = GameState {
+        phase: Phase::Playing,
+        day: 2,
+        money: 30,
+        norm: norm_for(2),
+        day_earned: 40,
+        time_left: 150.0,
+        msg: "ПЕРЕБРОД 130% — ПРОБЕЛ В СИНЮЮ ЗОНУ (ВЕДРО ЛЬЁТСЯ)".into(),
+        msg_t: 3.0,
+        ..Default::default()
+    };
+    canvas.clear();
+    ui::draw_frame(
+        &mut canvas,
+        &font,
+        &cool_state,
+        &qte_inv,
+        &cool_barrels,
+        &no_qte,
+        &no_wash,
+        &cool,
+        &no_cust,
+        6.8,
+        &cam,
+        &map,
+        false,
+        &no_modal,
+    );
+    snap(&canvas, Some(&world_c), "15_coolqte.bmp");
+
+    // --- 16. Пауза (ESC): меню поверх приглушённого мира ---
     let pause_state = GameState {
         phase: Phase::Paused,
         day: 2,
@@ -389,20 +654,25 @@ pub fn run() {
         &inv,
         &barrels,
         &no_qte,
+        &no_wash,
+        &no_cool,
         &custs,
         3.5,
         &cam,
-        &map, false,
+        &map,
+        false,
+        &no_modal,
     );
-    snap(&canvas, Some(&world_a), "13_pause.bmp");
+    snap(&canvas, Some(&world_b), "16_pause.bmp");
 
-    // --- 14. Посуда кончилась: предупреждение сверху + красные нули на складе ---
+    // --- 17. Посуда кончилась: предупреждение сверху + красные нули на складе ---
     let no_inv = Inventory {
         hands: [None; 4],
         selected: 0,
         stock_croutons: 0,
         stock_sugar: 0,
         stock_glass: 0,
+        dirty_glasses: 0,
         stock_jar: 0,
         stock_bottle: 0,
     };
@@ -413,7 +683,7 @@ pub fn run() {
         norm: norm_for(1),
         day_earned: 0,
         time_left: 60.0,
-        msg: "ПОСУДА КОНЧИЛАСЬ — КУПИТЕ (3) НА СКЛАДЕ ЗАВТРА".into(),
+        msg: "ПОСУДА КОНЧИЛАСЬ! КУПИТЕ У ОКНА СНАБЖЕНИЯ (E)".into(),
         msg_t: 3.0,
         ..Default::default()
     };
@@ -426,12 +696,16 @@ pub fn run() {
         &no_inv,
         &empty_barrels,
         &no_qte,
+        &no_wash,
+        &no_cool,
         &no_cust,
         2.2,
         &cam,
-        &map, false,
+        &map,
+        false,
+        &no_modal,
     );
-    snap(&canvas, Some(&world_c), "14_noposuda.bmp");
+    snap(&canvas, Some(&world_c), "17_noposuda.bmp");
 
     println!("selftest: кадры записаны в {}/", out.display());
 }

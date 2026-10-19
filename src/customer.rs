@@ -6,7 +6,6 @@ use bevy::prelude::*;
 use rand::prelude::*;
 
 use crate::dialogues;
-use crate::inventory::Inventory;
 use crate::sprites::{NpcKind, Vessel};
 
 pub const SPEED: f32 = 1.6;
@@ -14,8 +13,9 @@ const ENTER_TIME: f32 = 95.0;
 const QUEUE_TIME: f32 = 78.0;
 const BUBBLE_TIME: f32 = 5.0;
 
-/// Точки очереди строго перед прилавком (северная сторона).
-pub const QUEUE_SPOTS: [(f32, f32); 4] = [(3.5, 2.7), (5.5, 2.7), (7.5, 2.7), (9.5, 2.7)];
+/// Точки очереди — ровная линия «один за другим» вглубь к двери (ТЗ №6):
+/// spot 0 — первым у прилавка (единственный, чья терпимость тикает).
+pub const QUEUE_SPOTS: [(f32, f32); 3] = [(5.5, 2.7), (5.5, 1.7), (5.5, 0.7)];
 
 /// Дверь (северная стена) — появления и ухода.
 pub const DOOR: Vec2 = Vec2::new(5.5, 0.5);
@@ -141,7 +141,8 @@ pub fn customer_update(
                 }
             }
             CustState::Queued => {
-                if !tut {
+                // ТЗ №6: терпимость тикает только у ПЕРВОГО у прилавка.
+                if !tut && c.spot == 0 {
                     c.patience -= dt;
                     // нетерпеливые реплики на середине ожидания
                     if (c.patience - c.max_patience * 0.5).abs() < dt {
@@ -178,6 +179,28 @@ pub fn customer_update(
     }
     for e in despawn {
         commands.entity(e).despawn();
+    }
+    // ТЗ №6: очередь уплотняется — освободилось место у прилавка,
+    // все сзади шагают вперёд на ступень ближе.
+    let mut shift: Vec<(Entity, usize)> = Vec::new();
+    {
+        let mut list: Vec<(Entity, usize)> = q
+            .iter()
+            .filter(|(_, c)| matches!(c.state, CustState::Queued | CustState::Entering))
+            .map(|(e, c)| (e, c.spot))
+            .collect();
+        list.sort_by_key(|&(_, s)| s);
+        for (i, (e, s)) in list.into_iter().enumerate() {
+            if i < QUEUE_SPOTS.len() && i != s {
+                shift.push((e, i));
+            }
+        }
+    }
+    for (e, nspot) in shift {
+        if let Ok((_, mut c)) = q.get_mut(e) {
+            c.spot = nspot;
+            c.path = path_to_spot(nspot);
+        }
     }
 }
 

@@ -5,9 +5,9 @@ use std::collections::VecDeque;
 
 use bevy::prelude::*;
 
-use crate::brewing::{BarrelPhase, Barrels};
+use crate::brewing::{BarrelPhase, Barrels, BrewQte};
 use crate::customer::{CustState, Customer, QUEUE_SPOTS};
-use crate::day_cycle::{give_start_package, GameState, Phase};
+use crate::day_cycle::{give_start_package, start_day, GameState, Phase};
 use crate::inventory::{HandItem, Inventory};
 use crate::sprites::{NpcKind, Vessel};
 
@@ -17,34 +17,39 @@ pub struct TutStep {
     pub target: (f32, f32),
 }
 
-pub const TUT_STEPS: [TutStep; 7] = [
+pub const TUT_STEPS: [TutStep; 8] = [
     TutStep {
-        text: "ШАГ 1/7. ВОЗЬМИТЕ СУХАРИ У ПОЛКИ (E)",
+        text: "ШАГ 1/8. ВОЗЬМИТЕ СУХАРИ У ПОЛКИ (E)",
         target: (3.5, 6.5),
     },
     TutStep {
-        text: "ШАГ 2/7. НАБЕРИТЕ ВОДУ У КОЛОНКИ (E)",
+        text: "ШАГ 2/8. НАБЕРИТЕ ВОДУ У КОЛОНКИ (E)",
         target: (6.5, 6.5),
     },
     TutStep {
-        text: "ШАГ 3/7. ВОЗЬМИТЕ САХАР С ИЗЮМОМ (E)",
+        text: "ШАГ 3/8. ВОЗЬМИТЕ САХАР С ИЗЮМОМ (E)",
         target: (5.5, 6.5),
     },
     TutStep {
-        text: "ШАГ 4/7. К БОЧКЕ: E ТРИЖДЫ (СУХАРИ-ВОДА-САХАР)",
+        text: "ШАГ 4/8. К БОЧКЕ: E ТРИЖДЫ (СУХАРИ-ВОДА-САХАР)",
+        target: (1.5, 4.5),
+    },
+    // ТЗ №2: отдельный шаг на мини-игру ускорения брожения.
+    TutStep {
+        text: "ШАГ 5/8. НАЖИМАЙТЕ ПРОБЕЛ В ЗОНУ БЕГУНКА",
         target: (1.5, 4.5),
     },
     TutStep {
-        text: "ШАГ 5/7. ВОЗЬМИТЕ СТАКАН СО СТЕЛЛАЖА (E)",
+        text: "ШАГ 6/8. ВОЗЬМИТЕ СТАКАН СО СТЕЛЛАЖА (E)",
         target: (8.5, 6.5),
     },
     TutStep {
-        text: "ШАГ 6/7. КВАС ГОТОВ: ДЕРЖИТЕ E У БОЧКИ",
+        text: "ШАГ 7/8. КВАС ГОТОВ: ДЕРЖИТЕ E У БОЧКИ",
         target: (1.5, 4.5),
     },
     TutStep {
-        text: "ШАГ 7/7. ОТДАЙТЕ КВАС БАБУШКЕ (E)",
-        target: (3.5, 2.7), // на шаге 7 цель — сама бабушка
+        text: "ШАГ 8/8. ОТДАЙТЕ КВАС БАБУШКЕ (E)",
+        target: (5.5, 2.7), // на шаге 8 цель — сама бабушка у прилавка
     },
 ];
 
@@ -55,8 +60,10 @@ pub fn tutorial_system(
     mut state: ResMut<GameState>,
     mut inv: ResMut<Inventory>,
     mut barrels: ResMut<Barrels>,
+    qte: Res<BrewQte>,
     customers: Query<(Entity, &Customer)>,
     mut commands: Commands,
+    mut dirty: ResMut<crate::day_cycle::Dirty>,
 ) {
     if state.phase != Phase::Tutorial {
         return;
@@ -66,9 +73,15 @@ pub fn tutorial_system(
         state.msg_t -= dt;
     }
 
-    // пропуск: T сразу на склад (ENTER в меню — старт, тут не мешает)
+    // T: на шаге мини-игры (5) пропускает только этот шаг,
+    // на остальных — пропускает обучение целиком.
     if keys.just_pressed(KeyCode::KeyT) {
-        finish(&mut state, &mut inv, &customers, &mut commands);
+        if state.tut_step == 4 {
+            state.tut_step = 5;
+            state.notify("ТАК ДЕРЖАТЬ!".into());
+        } else {
+            finish(&mut state, &mut inv, &mut barrels, &customers, &mut commands, &mut dirty);
+        }
         return;
     }
 
@@ -82,8 +95,8 @@ pub fn tutorial_system(
         }
     }
 
-    // последний шаг: появляется бабушка, пока её нет
-    if state.tut_step == 6 && customers.iter().count() == 0 {
+    // финальный шаг: появляется бабушка, пока её нет
+    if state.tut_step == 7 && customers.iter().count() == 0 {
         let c = Customer {
             kind: NpcKind::Grandma,
             order: Vessel::Glass,
@@ -110,20 +123,22 @@ pub fn tutorial_system(
             .map
             .values()
             .any(|b| matches!(b.phase, BarrelPhase::Ferment(_))),
-        4 => inv
-            .hands
-            .iter()
-            .any(|h| matches!(h, Some(HandItem::Empty(_, _)))),
+        // ТЗ №2: шаг закрывается после одного попадания в зону бегунка.
+        4 => qte.flash > 0.0,
         5 => inv
             .hands
             .iter()
+            .any(|h| matches!(h, Some(HandItem::Empty(_, _)))),
+        6 => inv
+            .hands
+            .iter()
             .any(|h| matches!(h, Some(HandItem::Full(_, _, _)))),
-        6 => customers.iter().any(|(_, c)| c.served),
+        7 => customers.iter().any(|(_, c)| c.served),
         _ => false,
     };
     if done {
-        if state.tut_step >= 6 {
-            finish(&mut state, &mut inv, &customers, &mut commands);
+        if state.tut_step >= 7 {
+            finish(&mut state, &mut inv, &mut barrels, &customers, &mut commands, &mut dirty);
         } else {
             state.tut_step += 1;
             state.notify("ТАК ДЕРЖАТЬ!".into());
@@ -134,8 +149,10 @@ pub fn tutorial_system(
 fn finish(
     state: &mut GameState,
     inv: &mut Inventory,
+    barrels: &mut Barrels,
     customers: &Query<(Entity, &Customer)>,
     commands: &mut Commands,
+    dirty: &mut crate::day_cycle::Dirty,
 ) {
     state.tut_done = true;
     state.tut_step = 0;
@@ -143,6 +160,6 @@ fn finish(
         commands.entity(e).despawn();
     }
     give_start_package(state, inv);
-    state.phase = Phase::Shopping;
-    state.notify("ОБУЧЕНИЕ ГОТОВО! СЫРЬЁ: 1-3, ЗАТЕМ ENTER".into());
+    // ТЗ №3: день начинается сразу, без экрана закупки.
+    start_day(state, barrels, dirty);
 }
