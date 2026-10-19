@@ -14,17 +14,43 @@ Soviet kvass shop — Doom-style рейкастер на Rust + Bevy. Vyatka Owl
 ### Требования
 
 * **Rust 1.78+** (нужен для `edition = "2021"` и актуального Bevy)
-* На Linux — стандартные системные зависимости Bevy (X11/Wayland):
+* На Linux — системные зависимости Bevy (ALSA, udev, X11):
+
+**Fedora:**
 
 ```bash
-# Debian / Ubuntu
+sudo dnf install gcc pkgconf-pkg-config alsa-lib-devel systemd-devel \
+    libxkbcommon-devel libX11-devel libXcursor-devel libXi-devel libXrandr-devel
+```
+
+**Arch:**
+
+```bash
+sudo pacman -S --needed gcc pkgconf alsa-lib systemd-libs libxkbcommon \
+    libx11 libxcursor libxi libxrandr
+```
+
+**NixOS:**
+
+```bash
+nix-shell -p rustup gcc pkg-config alsa-lib systemd libxkbcommon \
+    libX11 libxcursor libxi libXrandr
+rustup default stable
+```
+
+> На NixOS бинарник может не стартовать из-за FHS — тогда запускайте через
+> обёртку: `nix-shell -p steam-run --run ./target/release/kvass-shop`.
+
+**Debian / Ubuntu:**
+
+```bash
 sudo apt update
 sudo apt install -y build-essential pkg-config libx11-dev libxcursor-dev \
     libxrandr-dev libxi-dev libxkbcommon-dev libwayland-dev \
     libasound2-dev libudev-dev
 ```
 
-Без них сборка упадёт на стадии линковки `bevy` (нехватка `libX11`,
+Без пакетов сборка упадёт на стадии линковки `bevy` (нехватка `libX11`,
 `libasound` и т.п.), а не в коде игры.
 
 ### Linux — релизная сборка
@@ -170,7 +196,7 @@ src/
   audio.rs       сэмплы, шаги, голосовые пузыри
   selftest.rs    оффскрин-самотест
 assets/
-  fonts/         pixelify.ttf (кириллица), vt323.ttf
+  fonts/         golos.ttf (кириллица, OFL) + запасные pixelify/vt323
   sounds/        WAV-сэмплы
 tools/
   fix_font.py    починка шрифта (см. ниже)
@@ -178,17 +204,10 @@ tools/
 
 ### Про шрифт
 
-`assets/fonts/pixelify.ttf` чинится скриптом `tools/fix_font.py`, потому что
-в исходном файле (и в официальном Pixelify Sans из google/fonts) отсутствуют
-глифы `uni041E` (О) и `uni041F` (П), а `uni042D`/`uni044D` (Э/э) — точная
-копия З/з. Без починки «П» рендерился пустым боксом, то есть на пиксельном
-шрифте читался как «О».
-
-Если шрифт заново положили из внешнего источника — прогоните:
-
-```bash
-python tools/fix_font.py assets/fonts/pixelify.ttf
-```
+Основной шрифт — `assets/fonts/golos.ttf` (Golos Text, лицензия OFL,
+`assets/fonts/OFL-golos.txt`). Пиксельный вид делается в коде: шрифт
+растризуется в полукегле, бинаризуется и увеличивается ×2 — крупные
+жёсткие пиксели без сглаживания, читаемая кириллица.
 
 ---
 
