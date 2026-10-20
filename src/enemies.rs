@@ -99,11 +99,12 @@ pub fn officials_fine(
 /// Хулиганы: спавн со 2-го дня, угрожают, ломают бочку.
 pub fn hooligan_spawn(
     mut commands: Commands,
-    state: Res<GameState>,
+    mut state: ResMut<GameState>,
     customers: Query<&Customer>,
     mut game_rng: ResMut<GameRng>,
     mut cooldown: Local<f32>,
     time: Res<Time>,
+    bank: Res<crate::audio::SoundBank>,
 ) {
     if state.phase != Phase::Playing || state.day < 2 {
         return;
@@ -120,7 +121,12 @@ pub fn hooligan_spawn(
     if !rng.random_bool(0.02) {
         return;
     }
-    *cooldown = 25.0;
+    // ТЗ №5: бандиты приходят реже — интервал между визитами ~55 с.
+    *cooldown = 55.0;
+    // ТЗ №5: атмосферная тревога — красная пульсация экрана + низкий гул.
+    state.alarm_t = 3.0;
+    state.notify("БАНДИТЫ НА ПОДХОДЕ! БЕГИТЕ К КАССЕ (E) - ЗАПЛАТИТЕ ДАНЬ".into());
+    crate::audio::play_sfx(&mut commands, &bank, "alarm", 0.8);
     let c = Customer {
         kind: NpcKind::Hooligan,
         order: crate::sprites::Vessel::Glass,

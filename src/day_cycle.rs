@@ -58,6 +58,9 @@ pub struct GameState {
     pub face_t: f32,
     /// Прогресс промывки бочки удержанием E (0..1) — полоска в HUD (ТЗ №8).
     pub wash_bar: f32,
+    /// Тревога (ТЗ №5): >0 — бандиты на подходе, экран пульсирует красным.
+    /// Убывает в `day_system`, выставляется при спавне хулигана.
+    pub alarm_t: f32,
 }
 
 impl Default for GameState {
@@ -83,6 +86,7 @@ impl Default for GameState {
             face_mood: 0,
             face_t: 0.0,
             wash_bar: 0.0,
+            alarm_t: 0.0,
         }
     }
 }
@@ -108,7 +112,8 @@ pub fn give_start_package(state: &mut GameState, inv: &mut crate::inventory::Inv
     inv.stock_croutons = 2;
     inv.stock_sugar = 2;
     // ТЗ №8/№4: посуда многоразовая — стартовый пул, не покупается.
-    inv.stock_glass = 6;
+    // ТЗ №5: запас урезан (4/2/1) — мыть тару приходится уже в середине дня 1.
+    inv.stock_glass = 4;
     inv.stock_jar = 2;
     inv.stock_bottle = 1;
     inv.dirty_glasses = 0;
@@ -307,6 +312,7 @@ pub fn day_system(
     customers: Query<&Customer>,
     mut game_rng: ResMut<GameRng>,
     mut commands: Commands,
+    mut modals: ResMut<crate::modals::Modals>,
 ) {
     if state.phase != Phase::Playing {
         return;
@@ -321,11 +327,19 @@ pub fn day_system(
             state.face_mood = 0;
         }
     }
+    // ТЗ №5: тревога (бандиты) пульсирует ~3 сек и гаснет.
+    if state.alarm_t > 0.0 {
+        state.alarm_t = (state.alarm_t - dt).max(0.0);
+    }
     state.time_left -= dt;
     if state.time_left <= 0.0 {
         state.time_left = 0.0;
         state.day_passed = state.money >= state.norm;
         state.phase = Phase::DayEnd;
+        // ТЗ №5: время идёт даже в модалках — смена может кончиться
+        // прямо под окном снабжения/мойки: закрываем, чтобы не «зависло».
+        modals.modal = crate::modals::Modal::None;
+        modals.sponge = crate::modals::Sponge::default();
         return;
     }
     // спавн покупателей

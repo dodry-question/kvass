@@ -733,16 +733,16 @@ pub fn run() {
     );
     snap(&canvas, Some(&world_c), "18_spongepick.bmp");
 
-    // --- 19. Мусорка (ТЗ №5): урна — билборд-спрайт на полу (не тайл-стена),
+    // --- 19. Мусорка (ТЗ №5): урна — билборд-спрайт в уголке у южной стены,
     //         игрок подошёл: виден спрайт и подсказка «E МУСОРКА...» ---
     let trash_cam = GameCam {
-        x: 3.5,
-        y: 4.3,
-        angle: std::f32::consts::PI, // взгляд на запад: урна (2.3,4.3) в 1.2 м — уже в радиусе E
+        x: 3.7,
+        y: 6.4,
+        angle: std::f32::consts::PI, // взгляд на запад: урна (2.5,6.5) в 1.2 м — уже в радиусе E
     };
     let trash_props = [crate::sprites::WorldProp {
         kind: crate::sprites::PropKind::TrashBin,
-        pos: Vec2::new(2.3, 4.3),
+        pos: Vec2::new(2.5, 6.5),
     }];
     renderer.render(&map, &textures, &trash_cam, 1.0);
     renderer.draw_props(&sprites, &trash_props, &trash_cam, 1.0);
@@ -856,6 +856,38 @@ pub fn run() {
         &no_props,
     );
     snap(&canvas, Some(&world_hint), "21_hint.bmp");
+
+    // --- 22. Тревога (ТЗ №5): бандиты на подходе — красная пульсация экрана ---
+    let alarm_state = GameState {
+        phase: Phase::Playing,
+        day: 2,
+        money: 45,
+        norm: norm_for(2),
+        day_earned: 40,
+        time_left: 300.0,
+        msg: "БАНДИТЫ НА ПОДХОДЕ! БЕГИТЕ К КАССЕ (E) - ЗАПЛАТИТЕ ДАНЬ".into(),
+        msg_t: 3.0,
+        alarm_t: 2.0,
+        ..Default::default()
+    };
+    canvas.clear();
+    ui::draw_frame(
+        &mut canvas,
+        &font,
+        &alarm_state,
+        &inv,
+        &barrels,
+        &no_qte,
+        &no_cool,
+        &no_cust,
+        4.4,
+        &hint_cam,
+        &map,
+        false,
+        &no_modal,
+        &no_props,
+    );
+    snap(&canvas, Some(&world_hint), "22_alarm.bmp");
 
     println!("selftest: кадры записаны в {}/", out.display());
 }

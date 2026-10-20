@@ -90,7 +90,7 @@ fn window_setup() -> Window {
 }
 
 /// Идентификатор сборки — выводится в HUD для проверки версии exe (ТЗ).
-pub const BUILD_ID: &str = "BUILD 2026-10-20.13 TRASH-SPRITE";
+pub const BUILD_ID: &str = "BUILD 2026-10-21.14 TIME-FLOW";
 
 pub fn assets_root() -> std::path::PathBuf {
     let mut bases: Vec<std::path::PathBuf> = Vec::new();
@@ -180,36 +180,38 @@ fn main() {
             Update,
             (
                 (
-                    player::movement.run_if(in_world),
-                    player::mouse_turn.run_if(in_world),
+                    // ТЗ №5 «время не стоит на месте»: в модалках (мойка,
+                    // снабжение, выбор тары) мир продолжает жить — гейтится
+                    // только игровой ввод. Полная пауза — ESC (Phase::Paused).
+                    player::movement.run_if(in_world).run_if(modal_closed),
+                    player::mouse_turn.run_if(modal_closed),
                     grab_cursor,
-                    slot_select,
-                    day_cycle::phase_system,
+                    slot_select.run_if(modal_closed),
+                    day_cycle::phase_system.run_if(modal_closed),
                     day_cycle::day_system,
-                    tutorial::tutorial_system,
+                    tutorial::tutorial_system.run_if(modal_closed),
                     brewing::barrel_update.run_if(in_world),
                     customer::customer_update.run_if(in_world),
                     enemies::enemies_spawn,
                     enemies::officials_fine.run_if(in_play),
                     enemies::hooligan_spawn.run_if(in_play),
                     enemies::hooligan_behavior.run_if(in_play),
-                    interact::interact,
-                    interact::fill_hold,
-                    interact::brew_qte,
-                    interact::cool_qte,
+                    interact::interact.run_if(modal_closed),
+                    interact::fill_hold.run_if(modal_closed),
+                    interact::brew_qte.run_if(modal_closed),
+                    interact::cool_qte.run_if(modal_closed),
                 )
                     .chain(),
                 (
                     audio::ambience,
                     audio::bubble_volume,
                     audio::footsteps,
+                    // сигналы бочки слышно и из-под модалки — квас бродит!
                     audio::event_sounds,
                 )
                     .chain(),
             )
-                .chain()
-                // ТЗ №3/№4: пока открыта модалка — мир заморожен.
-                .run_if(modal_closed),
+                .chain(),
         )
         .add_systems(
             Update,
@@ -264,10 +266,11 @@ fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
     ));
 
     // ТЗ №5: мусорка — статичный билборд-спрайт (а не тайл-стена), стоит
-    // в углу у мойки. Логика E — в interact::interact по близости.
+    // в уголке у южной стены правее мойки — не перекрывает обзор и проход.
+    // Логика E — в interact::interact по близости.
     commands.spawn(sprites::WorldProp {
         kind: sprites::PropKind::TrashBin,
-        pos: Vec2::new(2.3, 4.3),
+        pos: Vec2::new(2.5, 6.5),
     });
 
     // Канвас UI 1280×800 (2× буфер мира) — прозрачный слой поверх мира.

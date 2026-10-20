@@ -14,9 +14,9 @@ use crate::map::Tile;
 
 /// Секунд на 0..100% в обычном (авто-)режиме.
 pub const BREW_TIME: f32 = 55.0;
-/// Секунд на 100..125% (окно, пока квас ещё хороший).
+/// Секунд на 100..125% при базовой скорости (окно, пока квас ещё хороший).
 pub const READY_WINDOW: f32 = 24.0;
-/// Секунд на 125..150% (переброд окончательно пропадает).
+/// Секунд на 125..150% при базовой скорости.
 pub const OVERRIPE_TIME: f32 = 34.0;
 pub const BARREL_PORTIONS: u32 = 20;
 
@@ -26,9 +26,13 @@ pub const PCT_OVERRIPE: f32 = 125.0;
 pub const PCT_RUINED: f32 = 150.0;
 /// Прибавка за попадание в зону мини-игры ускорения.
 pub const QTE_BONUS: f32 = 10.0;
-/// ТЗ §1: в критической зоне 100–150% брожение замедляется втрое (×0.33),
-/// чтобы у игрока был запас времени разлить готовый квас до переброда.
-pub const CRITICAL_RATE: f32 = 0.33;
+/// ТЗ №5: 100..125% — окно идеального кваса, брожение ЗАМЕДЛЯЕТСЯ (×0.4):
+/// спокойное время, чтобы разлить.
+pub const IDEAL_RATE: f32 = 0.4;
+/// ТЗ №5: 125..150% — ОПАСНАЯ ЗОНА ПЕРЕБРОДА: скорость снова УСКОРЯЕТСЯ (×1.8).
+/// Квас стремительно скисает: либо срочно ведро с водой (охлаждение),
+/// либо разливать, пока не стало150%.
+pub const DANGER_RATE: f32 = 1.8;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum BarrelPhase {
@@ -220,7 +224,8 @@ pub fn barrel_update(
                 }
             }
             BarrelPhase::Ready(p) => {
-                *p += dt * (PCT_OVERRIPE - PCT_READY) / READY_WINDOW * CRITICAL_RATE;
+                // ТЗ №5: окно идеального кваса — замедленно (×0.4).
+                *p += dt * (PCT_OVERRIPE - PCT_READY) / READY_WINDOW * IDEAL_RATE;
                 if *p >= PCT_OVERRIPE {
                     let q = *p;
                     b.phase = BarrelPhase::Overripe(q);
@@ -228,7 +233,9 @@ pub fn barrel_update(
                 }
             }
             BarrelPhase::Overripe(p) => {
-                *p += dt * (PCT_RUINED - PCT_OVERRIPE) / OVERRIPE_TIME * CRITICAL_RATE;
+                // ТЗ №5: опасная зона — брожение ускоряется (×1.8), квас
+                // стремительно скисает: успей охладить или разлить!
+                *p += dt * (PCT_RUINED - PCT_OVERRIPE) / OVERRIPE_TIME * DANGER_RATE;
                 if *p >= PCT_RUINED {
                     b.phase = BarrelPhase::Ruined;
                     b.ran_out = false; // порча по времени, а не «слили всё»
@@ -256,10 +263,10 @@ pub fn seconds_to_next(b: &Barrel) -> f32 {
     match b.phase {
         BarrelPhase::Ready(p) => ((PCT_OVERRIPE - p).max(0.0) / (PCT_OVERRIPE - PCT_READY))
             * READY_WINDOW
-            / CRITICAL_RATE,
+            / IDEAL_RATE,
         BarrelPhase::Overripe(p) => ((PCT_RUINED - p).max(0.0) / (PCT_RUINED - PCT_OVERRIPE))
             * OVERRIPE_TIME
-            / CRITICAL_RATE,
+            / DANGER_RATE,
         BarrelPhase::Ferment(p) => ((PCT_READY - p).max(0.0) / PCT_READY) * b.brew_time,
         _ => 0.0,
     }

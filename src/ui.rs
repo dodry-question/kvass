@@ -53,10 +53,10 @@ pub const BAR_Y: i32 = 672;
 pub const MSG_Y: i32 = 628;
 /// Полоска подсказки «что перед вами».
 pub const HINT_Y: i32 = 580;
-/// Панель шага обучения (ТЗ №6): полоски мини-игр начинаются с 506,
-/// панель высотой 88 стоит выше с запасом 40 px — наложений нет
-/// и высота не «прыгает» между шагами.
-pub const TUT_Y: i32 = 378;
+/// Панель шага обучения (ТЗ №6/№5): опущена к низу — над полосками
+/// мини-игр (они с 506), прицел и центр экрана свободны.
+/// Панель высотой 88: 406..494, до полосок 12 px запаса, наложений нет.
+pub const TUT_Y: i32 = 406;
 
 fn blink(t: f32, hz: f32) -> bool {
     (t * hz) as i32 % 2 == 0
@@ -119,6 +119,14 @@ pub fn draw_frame(
             draw_bubbles(canvas, font, &bubbles);
             if state.phase == Phase::Tutorial {
                 draw_tutorial(canvas, font, state, customers, cam, t);
+            }
+            // ТЗ №5: «тревога» — бандиты на подходе: экран плавно пульсирует
+            // красным2-3 раза (затухающая вспышка), чтобы сразу бежать к кассе.
+            if state.alarm_t > 0.0 {
+                let k = (state.alarm_t / 3.0).min(1.0); // 3 секунды затухания
+                let flash = (0.5 + 0.5 * (t * 6.0).sin()).powi(2);
+                let a = (95.0 * k * flash) as u8;
+                canvas.rect(0, 0, CV_W, CV_H, col::RED, a);
             }
             // ТЗ №3/№4: открытая модалка рисуется поверх затемнённого мира.
             if modal.is_open() {
@@ -1169,14 +1177,12 @@ fn draw_sponge_modal(
         let rx = gx + grid + 40;
         let rw = x + w - 40 - rx;
         font.draw(c, rx, y + 128, sp.vessel.name(), SZ_L, col::LAMP, 255);
-        let done = format!("ВЫТЕРТО: {} ИЗ {}", sp.wiped, SPONGE_N * SPONGE_N);
+        let done = format!("ВЫТЕРТО: {} ИЗ {}", sp.wiped, sp.total);
         font.draw(c, rx, y + 172, &done, SZ_M, col::WHITE, 255);
         let bar_y = y + 210;
         bar(c, rx, bar_y, rw, 24, sp.ratio(), col::KVASS_L);
-        // метка порога 80%
-        let tick = rx + 4 + ((rw - 8) as f32 * 0.8) as i32;
-        c.rect(tick, bar_y - 6, 3, 36, col::RED, 255);
-        font.draw(c, rx, bar_y + 34, "ПОРОГ 80% — И ЧИСТО", SZ_S, col::RED, 255);
+        // ТЗ №5: успех — строго 100% чистоты, без единого пятна.
+        font.draw(c, rx, bar_y + 34, "ДО 100% — БЕЗ ПЯТЕН", SZ_S, col::RED, 255);
         let rest = format!("ЖДУТ МОЙКИ ЕЩЁ: {}", inv.total_dirty());
         font.draw_fit_sh(c, rx, y + 300, rw, &rest, SZ_S, col::TILE, 255);
 

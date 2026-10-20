@@ -8,8 +8,14 @@
 //!   сухарей/сахара. Банки и бутылки НЕ продаются (ТЗ №4): посуда
 //!   многоразовая, её возвращает мойка. Товар приходит через 3–5 сек.
 //! - `VesselPick` — выбор пустой посуды со стеллажа (клавиши 1/2/3).
-//! - `Sponge` — мини-игра мойки (ТЗ №4): выбор грязной посуды (1/2/3)
-//!   и протирание её губкой (WASD/стрелки) до 80% чистоты.
+//! - `Sponge` — мини-игра мойки (ТЗ №4/№5): выбор грязной посуды (1/2/3)
+//!   и протирание её губкой (WASD/стрелки) до строго 100% чистоты.
+//!   Сложность градируется: стакан — мало пятен, банка — больше,
+//!   бутылка — самая въевшаяся грязь (ТЗ №5).
+//!
+//! ТЗ №5 «время не стоит на месте»: пока открыта любая модалка, мир
+//! (время дня, очередь, брожение) продолжает жить — в main.rs гейтится
+//! только игровой ввод (движение, E), а не весь Update. Полная пауза — ESC.
 
 use bevy::prelude::*;
 use rand::prelude::*;
@@ -33,12 +39,20 @@ pub enum Modal {
 
 /// Сетка мойки: 8×8 клеток грязи поверх крупной иконки посуды.
 pub const SPONGE_N: usize = 8;
-/// Сколько клеток нужно вытереть (ТЗ №4: ≥80%).
-pub const SPONGE_DONE: u8 = ((SPONGE_N * SPONGE_N) as f32 * 0.8) as u8 + 1;
 /// Радиус губки в клетках.
 const SPONGE_R: f32 = 1.8;
 /// Скорость губки (WASD/стрелки), клеток в секунду.
 const SPONGE_SPEED: f32 = 5.0;
+
+/// Сколько клеток грязи у каждого вида посуды (ТЗ №5: градация сложности).
+/// Успех мойки — строго 100%: стереть ВСЯ грязь, ни одного пятна.
+pub fn sponge_dirt(v: Vessel) -> u8 {
+    match v {
+        Vessel::Glass => 20,  // мало пятен, пара взмахов
+        Vessel::Jar => 36,    // средняя площадь
+        Vessel::Bottle => 52, // въевшаяся грязь, почти вся сетка
+    }
+}
 
 /// Состояние мини-игры мойки: выбор посуды или протирание.
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -56,6 +70,8 @@ pub struct Sponge {
     pub vessel: Vessel,
     /// `dirty[y*8+x]` — в клетке ещё грязь.
     pub dirty: [bool; SPONGE_N * SPONGE_N],
+    /// Сколько клеток изначально было грязными (градация посуды, ТЗ №5).
+    pub total: u8,
     /// Положение губки (центр клетки, 0..8).
     pub cx: f32,
     pub cy: f32,
@@ -69,6 +85,7 @@ impl Default for Sponge {
             stage: SpongeStage::Picker,
             vessel: Vessel::Glass,
             dirty: [false; SPONGE_N * SPONGE_N],
+            total: 0,
             cx: (SPONGE_N as f32) / 2.0,
             cy: (SPONGE_N as f32) / 2.0,
             wiped: 0,
@@ -77,24 +94,37 @@ impl Default for Sponge {
 }
 
 impl Sponge {
-    /// Начать мыть конкретную посуду: сетка целиком в грязи.
+    /// Начать мыть конкретную посуду: пятна раскладываются по сетке
+    /// детерминированно (стакан редко, бутылка почти весь круг).
     pub fn begin(vessel: Vessel) -> Self {
+        let total = sponge_dirt(vessel);
+        let mut dirty = [false; SPONGE_N * SPONGE_N];
+        let salt = vessel as u8 as usize;
+        for i in 0..dirty.len() {
+            // разреженный детерминированный порядок — без «сетки подряд»
+            let score = (i * 17 + salt * 31 + (i / SPONGE_N) * 7) % (SPONGE_N * SPONGE_N);
+            dirty[i] = (score as u8) < total;
+        }
         Self {
             stage: SpongeStage::Wipe,
             vessel,
-            dirty: [true; SPONGE_N * SPONGE_N],
+            dirty,
+            total,
             cx: (SPONGE_N as f32) / 2.0,
             cy: (SPONGE_N as f32) / 2.0,
             wiped: 0,
         }
     }
 
-    /// Доля вытертой грязи, 0..1.
+    /// Доля вытертой грязи, 0..1 (1.0 = ни одного пятна — ТЗ №5: 100%).
     pub fn ratio(&self) -> f32 {
-        self.wiped as f32 / (SPONGE_N * SPONGE_N) as f32
+        if self.total == 0 {
+            return 1.0;
+        }
+        self.wiped as f32 / self.total as f32
     }
 
-    /// Стереть всё в радиусе губки. true — посуда вымыта (≥80%).
+    /// Стереть всё в радиусе губки. true — посуда вымыта строго на 100%.
     pub fn erase(&mut self) -> bool {
         for gy in 0..SPONGE_N {
             for gx in 0..SPONGE_N {
@@ -110,7 +140,7 @@ impl Sponge {
                 }
             }
         }
-        self.wiped >= SPONGE_DONE
+        self.wiped >= self.total && self.total > 0
     }
 
     /// Двигать губку (WASD/стрелки) и стереть на новом месте.
@@ -286,7 +316,7 @@ pub fn modal_input(
                         modals.sponge = Sponge::begin(v);
                         crate::audio::play_sfx(&mut commands, &bank, "water", 0.6);
                         state.notify(format!(
-                            "МОЕМ {}: WASD/СТРЕЛКИ ВЕДУТ ГУБКУ ({} ШТ)",
+                            "МОЕМ {}: СТЕРЕТЬ ВСЮ ГРЯЗЬ ДО ЧИСТОТЫ 100% (WASD, {} ШТ)",
                             v.name(),
                             inv.dirty_of(v)
                         ));

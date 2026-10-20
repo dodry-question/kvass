@@ -16,7 +16,7 @@ pub struct Sfx;
 
 pub const SOUNDS: &[&str] = &[
     "pour", "croutons", "water", "hiss", "ding", "hiss2", "fooff", "coin", "step1", "step2",
-    "door", "whistle", "pop", "bubble_loop", "street_loop",
+    "door", "whistle", "pop", "bubble_loop", "street_loop", "alarm",
 ];
 
 fn write_wav(path: &PathBuf, samples: &[f32]) {
@@ -288,6 +288,30 @@ pub fn generate_files() {
             out.push(s);
         }
         write_wav(&dir.join("street_loop.wav"), &out);
+    }
+    // «тревога» (ТЗ №5) — бандиты на подходе: два глухих удара + низкий скрип
+    {
+        let dur = 1.6;
+        let n = (SR as f32 * dur) as usize;
+        let mut out = Vec::with_capacity(n);
+        for i in 0..n {
+            let t = i as f32 / SR as f32;
+            // глухие удары (как кулак по кассе) в начале и через полсекунды
+            let mut thump = 0.0;
+            for &hit in [0.0, 0.55].iter() {
+                let d = t - hit;
+                if (0.0..0.4).contains(&d) {
+                    let f = 70.0 - d * 60.0; // провал вниз тона
+                    thump += (d * f * 6.28318).sin() * (1.0 - d / 0.4).powi(2) * 0.9;
+                }
+            }
+            // низкий скрип струны — «чувство опасности»
+            let scrape = ((t * 150.0).sin() + (t * 151.7).sin() * 0.7)
+                * 0.12
+                * (t / dur).powf(0.5).min(1.0);
+            out.push((thump + scrape) * 0.8);
+        }
+        write_wav(&dir.join("alarm.wav"), &out);
     }
 }
 
