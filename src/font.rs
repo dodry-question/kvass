@@ -226,25 +226,23 @@ impl Font {
         }
 
         let want = fontsize_env().unwrap_or_else(|| SIZES.to_vec());
-        let root = crate::assets_root();
-        let candidates = [
-            root.join("fonts").join("golos.ttf"),
-            root.join("fonts").join("pixelify.ttf"),
-            root.join("fonts").join("vt323.ttf"),
-        ];
         let mut sizes: HashMap<usize, HashMap<char, Glyph>> = HashMap::new();
         let mut metrics: HashMap<usize, SizeMetrics> = HashMap::new();
         let mut ttf = false;
         let mut px_label = String::from("5x6");
 
-        // TTF встроен в exe (ТЗ): шрифт обязан грузиться из любой папки запуска.
+        // ТЗ: шрифт встроен в exe и грузится ВСЕГДА первым — никакие файлы
+        // рядом с exe не могут его подменить. Раньше слепой поиск нашёл
+        // dist/assets/fonts/pixelify.ttf (без golos.ttf) и весь UI жил
+        // глифами Pixelify: «Ш как W», «К с рогом» — это его дизайн.
+        // Отладочное переопределение — только явной переменной KVASS_DEV_FONT.
+        let dev_font = std::env::var("KVASS_DEV_FONT").ok();
         let embedded: &[u8] = include_bytes!("../assets/fonts/golos.ttf");
-        let sources: Vec<(&str, Option<&[u8]>)> = vec![
-            (candidates[0].to_str().unwrap_or("golos.ttf"), None),
-            (candidates[1].to_str().unwrap_or("pixelify.ttf"), None),
-            (candidates[2].to_str().unwrap_or("vt323.ttf"), None),
-            ("golos.ttf (встроен в exe)", Some(embedded)),
-        ];
+        let mut sources: Vec<(&str, Option<&[u8]>)> =
+            vec![("golos.ttf (встроен в exe)", Some(embedded))];
+        if let Some(p) = dev_font.as_deref() {
+            sources.insert(0, (p, None));
+        }
 
         'load: for (name, data) in sources {
             let bytes = match data {
