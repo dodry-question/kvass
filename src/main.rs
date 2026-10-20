@@ -84,11 +84,18 @@ fn window_setup() -> Window {
     }
 }
 
+/// Идентификатор сборки — выводится в HUD для проверки версии exe (ТЗ).
+pub const BUILD_ID: &str = "BUILD 2026-10-20.4 GOLOS-EMBED";
+
 pub fn assets_root() -> std::path::PathBuf {
     let mut bases: Vec<std::path::PathBuf> = Vec::new();
     if let Ok(exe) = std::env::current_exe() {
         if let Some(d) = exe.parent() {
             bases.push(d.to_path_buf());
+            // dist/exe → корень проекта (assets лежит рядом с dist/)
+            if let Some(p) = d.parent() {
+                bases.push(p.to_path_buf());
+            }
         }
     }
     if let Ok(cwd) = std::env::current_dir() {

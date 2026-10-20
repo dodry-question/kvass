@@ -580,6 +580,13 @@ fn draw_hud(
         font.draw(c, x, BAR_Y + 16, hint, SZ_S, col::TILE_D, 230);
     }
 
+    // Ватермарка билда (ТЗ): если её нет — запущен старый exe
+    {
+        let bid = crate::BUILD_ID;
+        let x = (CV_W - font.w(bid, SZ_S)) / 2;
+        font.draw(c, x, 6, bid, SZ_S, col::TILE_D, 150);
+    }
+
     // --- Строка уведомления ---
     if state.msg_t > 0.0 {
         let alpha: u8 = if state.msg_t < 0.7 {

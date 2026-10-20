@@ -228,8 +228,23 @@ impl Font {
         let mut ttf = false;
         let mut px_label = String::from("5x6");
 
-        'load: for path in candidates {
-            let Ok(bytes) = std::fs::read(&path) else { continue };
+        // TTF встроен в exe (ТЗ): шрифт обязан грузиться из любой папки запуска.
+        let embedded: &[u8] = include_bytes!("../assets/fonts/golos.ttf");
+        let sources: Vec<(&str, Option<&[u8]>)> = vec![
+            (candidates[0].to_str().unwrap_or("golos.ttf"), None),
+            (candidates[1].to_str().unwrap_or("pixelify.ttf"), None),
+            (candidates[2].to_str().unwrap_or("vt323.ttf"), None),
+            ("golos.ttf (встроен в exe)", Some(embedded)),
+        ];
+
+        'load: for (name, data) in sources {
+            let bytes = match data {
+                Some(b) => b.to_vec(),
+                None => match std::fs::read(name) {
+                    Ok(b) => b,
+                    Err(_) => continue,
+                },
+            };
             let Ok(fnt) = fontdue::Font::from_bytes(bytes, fontdue::FontSettings::default()) else {
                 continue;
             };
@@ -240,7 +255,7 @@ impl Font {
                 .iter()
                 .filter(|&&c| fnt.rasterize(c, probe_px).0.width > 0)
                 .count();
-            eprintln!("font: {} — кириллица {have}/{}", path.display(), probe.len());
+            eprintln!("font: {} — кириллица {have}/{}", name, probe.len());
             if have < probe.len() {
                 continue;
             }
@@ -327,7 +342,7 @@ impl Font {
                 if !missing.is_empty() {
                     eprintln!(
                         "font: {} — нет глифов ({}): {:?}",
-                        path.display(),
+                        name,
                         missing.len(),
                         missing
                     );

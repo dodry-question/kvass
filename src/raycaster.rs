@@ -276,19 +276,42 @@ impl Renderer {
                     }
                 }
             }
-            // Деревянная крышка прилавка (ТЗ №6): при подходе вплотную
-            // закрашиваем верхнюю грань текстурой досок — никакой пустоты.
-            if hit_tile == Tile::Counter && perp < 1.6 && start > 0 {
-                let cap = ((SCREEN_H as f32 / perp.max(0.2)) as i32 / 16)
-                    .clamp(2, 24)
-                    .min(start);
-                for y in (start - cap)..start {
-                    let c = tex.texel(TexId::Counter, tex_x, 6);
-                    let mut bright = (1.0 - perp / MAX_DIST).max(0.3) * flicker * dark;
+            // Перспективная крышка низкой мебели (ТЗ №6): верхняя грань
+            // прилавка/бочки — от кромки фронта до задней кромки тайла.
+            // Клиент за прилавком считается низкой мебелью (ztop=0),
+            // крышка рисуется поверх дальних стен (честное перекрытие).
+            if matches!(hit_tile, Tile::Counter | Tile::Barrel) && start > 0 {
+                let frac = if hit_tile == Tile::Counter { 0.34f32 } else { 0.55 };
+                // t выхода луча из тайла — ближайшая дальняя граница клетки
+                let fx = if rdx.abs() < 1e-6 {
+                    f32::MAX
+                } else if rdx > 0.0 {
+                    (map_x as f32 + 1.0 - cam.x) / rdx
+                } else {
+                    (map_x as f32 - cam.x) / rdx
+                };
+                let fy = if rdy.abs() < 1e-6 {
+                    f32::MAX
+                } else if rdy > 0.0 {
+                    (map_y as f32 + 1.0 - cam.y) / rdy
+                } else {
+                    (map_y as f32 - cam.y) / rdy
+                };
+                let perp_exit = fx.min(fy).max(perp + 0.05);
+                let full2 = SCREEN_H as f32 / perp_exit.max(0.2);
+                let y_back = (HORIZON as f32 + full2 * (0.5 - frac)) as i32;
+                let band_top = y_back.max(0).min(start);
+                let span = (start_raw - band_top).max(1);
+                for y in band_top..start {
+                    let ty2 = (((y - band_top) as f32 * TEX_SIZE as f32 / span as f32) as usize)
+                        .min(TEX_SIZE - 1);
+                    let c = tex.texel(base_tex, tex_x, ty2);
+                    let mut bright = (1.0 - perp / MAX_DIST).max(0.25) * flicker * dark * 1.12;
                     if y & 1 == 1 {
-                        bright *= 0.75;
+                        bright *= 0.8;
                     }
-                    let band = light_band(bright, BAYER4[(x & 3) as usize][(y & 3) as usize]);
+                    let band =
+                        light_band(bright.min(1.35), BAYER4[(x & 3) as usize][(y & 3) as usize]);
                     idx[y as usize * SCREEN_W + x] = self.colormap[c as usize][band];
                 }
             }

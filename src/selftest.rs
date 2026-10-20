@@ -39,6 +39,7 @@ pub fn run() {
     let textures = Textures::generate();
     let sprites = SpriteSheet::generate();
     let font = Font::new();
+    eprintln!("{}", crate::BUILD_ID);
     eprintln!(
         "font metrics: {} — line(24)={} cap(24)={} w[КВАСНАЯ ЛАВКА](64)={} w[ШАГ](24)={}",
         font.px_label,
