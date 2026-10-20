@@ -465,7 +465,8 @@ pub fn brew_qte(
         (qte.flash + dt).min(0.0)
     };
     qte.lock = (qte.lock - dt).max(0.0);
-    if state.phase != Phase::Playing {
+    // ТЗ: в обучении полоска бегунка тоже обязана работать.
+    if !matches!(state.phase, Phase::Playing | Phase::Tutorial) {
         qte.reset();
         return;
     }
@@ -485,6 +486,16 @@ pub fn brew_qte(
     }
 
     let mut rng = &mut game_rng.0;
+    // ТЗ: на шаге обучения полоска видна сразу у бочки — без первого
+    // слепого нажатия в пустоту.
+    if state.phase == Phase::Tutorial && state.tut_step == 4 && !qte.active {
+        qte.active = true;
+        qte.barrel = Some((tx, ty));
+        qte.pos = 0.0;
+        qte.dir = 1.0;
+        qte.roll_zone(&mut rng);
+        qte.lock = 0.25;
+    }
     let pressed = keys.just_pressed(KeyCode::Space);
 
     if !qte.active {

@@ -1,6 +1,11 @@
 //! «КВАСНАЯ ЛАВКА» — Soviet kvass shop Doom-style raycaster.
 //! Vyatka_Owls Game Jam. Rust + Bevy.
 
+// Релиз без консольного окна: диагностика в UTF-8 рисовалась бы в legacy-
+// кодировке Windows-консоли («ударения» над буквами — артефакт CP852, а не
+// шрифта). Для --selftest/--dump-sprites консоль возвращается в main().
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 mod audio;
 mod brewing;
 mod canvas;
@@ -62,7 +67,7 @@ struct ScreenImages {
 /// переменная `KVASS_WINDOWED` (например `KVASS_WINDOWED=1280x800`) —
 /// так удобно запускать под Wine/Bottles, где borderless может не открыться.
 fn window_setup() -> Window {
-    let title = "КВАСНАЯ ЛАВКА".to_string();
+    let title = format!("КВАСНАЯ ЛАВКА [{BUILD_ID}]");
     match std::env::var("KVASS_WINDOWED") {
         Ok(v) => {
             let (w, h) = v
@@ -130,12 +135,28 @@ fn fit_screen(
     }
 }
 
+/// Возврат консольного окна для диагностических режимов (релиз без консоли).
+fn attach_console() {
+    #[cfg(windows)]
+    {
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn AllocConsole() -> i32;
+        }
+        unsafe {
+            AllocConsole();
+        }
+    }
+}
+
 fn main() {
     if std::env::args().any(|a| a == "--selftest") {
+        attach_console();
         selftest::run();
         return;
     }
     if std::env::args().any(|a| a == "--dump-sprites") {
+        attach_console();
         dump::run();
         return;
     }
