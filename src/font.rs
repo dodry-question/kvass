@@ -272,17 +272,16 @@ impl Font {
 
             for &px in &want {
                 let mut map: HashMap<char, Glyph> = HashMap::new();
-                // Пиксельный рендер: растризуем в половинном кегле, квантуем
-                // тайл в чёрное/белое и увеличиваем ×2 — жёсткие крупные
-                // пиксели, читаемая кириллица, стиль DOS.
-                let spx = (px as f32 / 2.0).max(4.0);
+                // Пиксельный рендер: растризуем в натуральном кегле, чтобы сохранить
+                // форму букв (дырки в «С», «З» и т.д.), квантуем тайл в чёрное/белое.
+                let spx = (px as f32).max(10.0);
                 // капс — верх «Н» над базовой линией
                 let (nm, _) = fnt.rasterize('Н', spx);
                 let cap = (nm.ymin + nm.height as i32) * 2;
                 let mut desc = 0i32;
                 for c in chars.clone() {
                     let (m, bmp) = fnt.rasterize(c, spx);
-                    let adv = ((m.advance_width * 2.0).round() as i32).max(2);
+                    let adv = ((m.advance_width).round() as i32).max(2);
                     if c == ' ' || m.width == 0 || m.height == 0 {
                         map.insert(
                             c,
@@ -325,14 +324,10 @@ impl Font {
                         },
                     );
                 }
-                let cap = cap.max(1);
-                let desc = desc.max(0);
-                let pad = (px as i32 / 7).max(3);
-                let line = cap + desc + pad;
                 // половина свободного места — над прописными, половина — под строкой
-                let top_pad = ((line - cap - desc) / 2).max(0);
+                let top_pad = 0;
                 sizes.insert(px, map);
-                metrics.insert(px, (cap, desc, line, top_pad));
+                metrics.insert(px, (cap, desc, 0, 0));
             }
             if let Some(m0) = sizes.get(&want[0]) {
                 let missing: Vec<char> = chars
