@@ -470,6 +470,12 @@ pub fn brew_qte(
         qte.reset();
         return;
     }
+    // ТЗ: полоска живёт только на шаге QTE (5/8); после перехода шага её
+    // быть не должно — иначе она висит под плашкой следующего шага.
+    if state.phase == Phase::Tutorial && state.tut_step != 4 {
+        qte.reset();
+        return;
+    }
 
     let (tx, ty) = front_tile(&cam);
     let at_barrel = map.get(tx, ty) == Tile::Barrel;
