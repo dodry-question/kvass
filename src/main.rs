@@ -90,7 +90,7 @@ fn window_setup() -> Window {
 }
 
 /// Идентификатор сборки — выводится в HUD для проверки версии exe (ТЗ).
-pub const BUILD_ID: &str = "BUILD 2026-10-20.11 RETRO-KASSA";
+pub const BUILD_ID: &str = "BUILD 2026-10-20.12 SPONGE-TRASH";
 
 pub fn assets_root() -> std::path::PathBuf {
     let mut bases: Vec<std::path::PathBuf> = Vec::new();
@@ -174,7 +174,6 @@ fn main() {
         )
         .insert_resource(ClearColor(Color::srgb(0.09, 0.07, 0.06)))
         .init_resource::<modals::Modals>()
-        .init_resource::<interact::WashQte>()
         .init_resource::<interact::CoolQte>()
         .add_systems(Startup, (setup, audio::load_bank).chain())
         .add_systems(
@@ -197,7 +196,6 @@ fn main() {
                     interact::interact,
                     interact::fill_hold,
                     interact::brew_qte,
-                    interact::wash_qte,
                     interact::cool_qte,
                 )
                     .chain(),
@@ -368,7 +366,6 @@ fn render_frame(
     inv: Res<Inventory>,
     barrels: Res<Barrels>,
     qte: Res<brewing::BrewQte>,
-    wash: Res<interact::WashQte>,
     cool: Res<interact::CoolQte>,
     modal: Res<modals::Modals>,
     customers: Query<&Customer>,
@@ -429,7 +426,6 @@ fn render_frame(
             &inv,
             &barrels,
             &qte,
-            &wash,
             &cool,
             &custs,
             t,

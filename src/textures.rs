@@ -40,9 +40,11 @@ pub enum TexId {
     Supply = 14,
     /// Мойка посуды: кафель, раковина, кран и сушилка со стаканами.
     Sink = 15,
+    /// Мусорка (ТЗ №5): рёберная металлическая бадья с крышкой.
+    Trash = 16,
 }
 
-pub const NUM_TEX: usize = 16;
+pub const NUM_TEX: usize = 17;
 
 pub struct Textures {
     /// data[tex][y*64+x] = индекс палитры
@@ -72,6 +74,7 @@ impl Textures {
         gen_water(&mut data[TexId::WaterTap as usize]);
         gen_supply(&mut data[TexId::Supply as usize]);
         gen_sink(&mut data[TexId::Sink as usize]);
+        gen_trash(&mut data[TexId::Trash as usize]);
         Self { data }
     }
 
@@ -641,6 +644,76 @@ fn gen_sink(t: &mut Vec<u8>) {
                     };
                 }
             }
+            px(t, x, y, c);
+        }
+    }
+}
+
+/// Мусорка (ТЗ №5): рёберная металлическая бадья с крышкой и табличкой.
+/// Низкая мебель (как прилавок/бочка): фронт + крышка сверху; текстура
+/// занимает весь тайл, бадья читается как стоящая в клетке.
+fn gen_trash(t: &mut Vec<u8>) {
+    let mut rng = StdRng::seed_from_u64(17);
+    for y in 0..TEX_SIZE {
+        for x in 0..TEX_SIZE {
+            let c = if y == 0 {
+                idx::BLACK
+            } else if y < 6 {
+                // крышка: светлый металл, блик по верхней кромке
+                if y < 3 {
+                    noisy(&mut rng, idx::METAL, idx::WHITE, 0.14)
+                } else {
+                    noisy(&mut rng, idx::METAL, idx::METAL_DARK, 0.16)
+                }
+            } else if y == 6 || y == 7 {
+                // тень под крышкой
+                if y == 6 { idx::METAL_DARK } else { idx::SHADOW }
+            } else if y >= 56 {
+                // цоколь у пола
+                if y == 56 {
+                    idx::METAL_DARK
+                } else {
+                    noisy(&mut rng, idx::METAL_DARK, idx::SHADOW, 0.25)
+                }
+            } else {
+                // рёбра жёсткости каждые 8 пикселей
+                let rib = x % 8 == 0 || x % 8 == 7;
+                if rib {
+                    idx::METAL_DARK
+                } else if y % 17 == 9 {
+                    // потёртости и грязь
+                    noisy(&mut rng, idx::SHADOW, idx::METAL_DARK, 0.6)
+                } else {
+                    noisy(&mut rng, idx::METAL, idx::METAL_DARK, 0.13)
+                }
+            };
+            px(t, x, y, c);
+        }
+    }
+    // ручка на крышке
+    for y in 1..5 {
+        for x in 28..36 {
+            let c = if x == 28 || x == 35 || y == 4 {
+                idx::BLACK
+            } else {
+                idx::METAL_DARK
+            };
+            px(t, x, y, c);
+        }
+    }
+    // табличка: красный щит с белыми условными штрихами надписи
+    for y in 24..36 {
+        for x in 16..48 {
+            let border = y == 24 || y == 35 || x == 16 || x == 47;
+            let c = if border {
+                idx::BLACK
+            } else if y % 3 == 0 && (x / 3) % 2 == 0 {
+                idx::WHITE
+            } else if y == 26 || y == 33 {
+                idx::RED_DARK
+            } else {
+                idx::RED
+            };
             px(t, x, y, c);
         }
     }

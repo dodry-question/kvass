@@ -14,9 +14,9 @@ use crate::canvas::{Canvas, CV_H, CV_W};
 use crate::day_cycle::{GameState, Phase, PAUSE_FROM_PLAYING, norm_for};
 use crate::font::{Font, SZ_L, SZ_M, SZ_S};
 use crate::inventory::{HandItem, Inventory};
-use crate::interact::{CoolQte, WashQte};
+use crate::interact::CoolQte;
 use crate::map::Map;
-use crate::modals::{Delivery, Modal, Modals, SupplyKind};
+use crate::modals::{Delivery, Modal, Modals, Sponge, SupplyKind};
 use crate::raycaster::{GameCam, Renderer, SCREEN_H, SCREEN_W};
 use crate::sprites::{NpcKind, SpriteSheet, Vessel};
 use crate::textures::Textures;
@@ -56,7 +56,6 @@ pub fn run() {
         angle: -0.45, // взгляд на кассу (9,3) и очередь у правой стены
     };
     let no_qte = BrewQte::default();
-    let no_wash = WashQte::default();
     let no_cool = CoolQte::default();
     let no_modal = Modals::default();
     let no_cust: Vec<ui::CustView> = Vec::new();
@@ -84,7 +83,6 @@ pub fn run() {
         &empty_inv,
         &Barrels::from_map(&map),
         &no_qte,
-        &no_wash,
         &no_cool,
         &no_cust,
         1.0,
@@ -103,6 +101,8 @@ pub fn run() {
         stock_sugar: 2,
         stock_glass: 6,
         dirty_glasses: 1,
+        dirty_jars: 1,
+        dirty_bottles: 0,
         stock_jar: 2,
         stock_bottle: 1,
     };
@@ -123,10 +123,11 @@ pub fn run() {
                 t: 3.4,
             },
             Delivery {
-                kind: SupplyKind::Jar,
+                kind: SupplyKind::Sugar,
                 t: 1.2,
             },
         ],
+        ..Default::default()
     };
     let custs = vec![
         cv(
@@ -154,7 +155,6 @@ pub fn run() {
         &inv,
         &Barrels::from_map(&map),
         &no_qte,
-        &no_wash,
         &no_cool,
         &custs,
         2.0,
@@ -178,7 +178,6 @@ pub fn run() {
         &inv,
         &Barrels::from_map(&map),
         &no_qte,
-        &no_wash,
         &no_cool,
         &custs,
         2.4,
@@ -210,6 +209,8 @@ pub fn run() {
         stock_sugar: 2,
         stock_glass: 5,
         dirty_glasses: 2,
+        dirty_jars: 1,
+        dirty_bottles: 1,
         stock_jar: 2,
         stock_bottle: 1,
     };
@@ -220,7 +221,7 @@ pub fn run() {
         norm: norm_for(2),
         day_earned: 60,
         time_left: 137.0,
-        msg: "СУХАРИ КОНЧИЛИСЬ — КУПИТЕ (1) У ОКНА СНАБЖЕНИЯ".into(),
+        msg: "СУХАРИ КОНЧИЛИСЬ — КУПИТЕ (1) НА СКЛАДЕ".into(),
         msg_t: 3.0,
         ..Default::default()
     };
@@ -256,7 +257,6 @@ pub fn run() {
         &inv,
         &barrels,
         &no_qte,
-        &no_wash,
         &no_cool,
         &custs,
         3.5,
@@ -287,7 +287,6 @@ pub fn run() {
         &inv,
         &Barrels::from_map(&map),
         &no_qte,
-        &no_wash,
         &no_cool,
         &no_cust,
         4.0,
@@ -311,7 +310,6 @@ pub fn run() {
         &inv,
         &Barrels::from_map(&map),
         &no_qte,
-        &no_wash,
         &no_cool,
         &no_cust,
         5.0,
@@ -342,15 +340,15 @@ pub fn run() {
     }
     for s in [
         "ШАГ 5/8. НАЖИМАЙТЕ ПРОБЕЛ В ЗОНУ БЕГУНКА",
-        "ОКНО СНАБЖЕНИЯ: [1] СУХАРИ [2] САХАР [3] БАНКИ [4] БУТЫЛКИ",
-        "СУХАРИ КОНЧИЛИСЬ — КУПИТЕ (1) У ОКНА СНАБЖЕНИЯ",
+        "ОКНО СНАБЖЕНИЯ: [1] СУХАРИ [2] САХАР",
+        "СУХАРИ КОНЧИЛИСЬ — КУПИТЕ (1) НА СКЛАДЕ",
         "ПРИЛАВОК - ОТДАТЬ КВАС ПОКУПАТЕЛЮ",
         "Б2 ГОТОВА 13/20 12С",
         "Дай, внучек, стаканчик квасика, холодненький...",
     ] {
         println!("font.w({s:?}) = {} px", font.w(s, SZ_M));
     }
-    let long = "ОКНО СНАБЖЕНИЯ: [1] СУХАРИ [2] САХАР [3] БАНКИ [4] БУТЫЛКИ";
+    let long = "ОКНО СНАБЖЕНИЯ: [1] СУХАРИ [2] САХАР";
     let fitted = font.fit(long, CV_W - 48, SZ_L);
     println!(
         "font.fit(длинная, 1232, 30) = {fitted} (тогда ширина {})",
@@ -388,7 +386,6 @@ pub fn run() {
         &inv,
         &barrels,
         &tut_qte,
-        &no_wash,
         &no_cool,
         &tut_cust,
         1.5,
@@ -503,6 +500,8 @@ pub fn run() {
         stock_sugar: 1,
         stock_glass: 4,
         dirty_glasses: 0,
+        dirty_jars: 0,
+        dirty_bottles: 0,
         stock_jar: 2,
         stock_bottle: 1,
     };
@@ -525,7 +524,6 @@ pub fn run() {
         &qte_inv,
         &barrels,
         &qte,
-        &no_wash,
         &no_cool,
         &qte_cust,
         6.0,
@@ -536,16 +534,18 @@ pub fn run() {
     );
     snap(&canvas, Some(&world_c), "13_qte.bmp");
 
-    // --- 14. Мытьё стаканов (ТЗ №8): полоска давления, 1/3 ---
-    let wash = WashQte {
-        active: true,
-        pos: 0.52,
-        dir: -1.0,
-        zone0: 0.44,
-        zone1: 0.58,
-        hits: 1,
-        lock: 0.0,
-        flash: 0.0,
+    // --- 14. Мойка посуды (ТЗ №4): губка протирает сетку грязи 8×8 ---
+    let mut sponge = Sponge::begin(Vessel::Glass);
+    sponge.cx = 3.2;
+    sponge.cy = 3.4;
+    let _ = sponge.erase();
+    sponge.cx = 5.0;
+    sponge.cy = 4.6;
+    let _ = sponge.erase();
+    let sponge_modal = Modals {
+        modal: Modal::Sponge,
+        sponge,
+        ..Default::default()
     };
     let wash_state = GameState {
         phase: Phase::Playing,
@@ -554,7 +554,7 @@ pub fn run() {
         norm: norm_for(2),
         day_earned: 40,
         time_left: 200.0,
-        msg: "СМЫВАЙТЕ ПЕНУ: 3 РАЗА ПРОБЕЛ В ЗОНУ (ГРЯЗНЫХ: 2)".into(),
+        msg: "МОЕМ СТАКАН: WASD ВЕДУТ ГУБКУ ПО СЕТКЕ".into(),
         msg_t: 3.0,
         ..Default::default()
     };
@@ -566,16 +566,15 @@ pub fn run() {
         &inv,
         &barrels,
         &no_qte,
-        &wash,
         &no_cool,
         &no_cust,
         6.4,
         &cam,
         &map,
         false,
-        &no_modal,
+        &sponge_modal,
     );
-    snap(&canvas, Some(&world_c), "14_washqte.bmp");
+    snap(&canvas, Some(&world_c), "14_sponge.bmp");
 
     // --- 15. Охлаждение перебродившей бочки (ТЗ №9): синяя зона ---
     let mut cool_barrels = Barrels::from_map(&map);
@@ -612,7 +611,6 @@ pub fn run() {
         &qte_inv,
         &cool_barrels,
         &no_qte,
-        &no_wash,
         &cool,
         &no_cust,
         6.8,
@@ -644,7 +642,6 @@ pub fn run() {
         &inv,
         &barrels,
         &no_qte,
-        &no_wash,
         &no_cool,
         &custs,
         3.5,
@@ -655,14 +652,16 @@ pub fn run() {
     );
     snap(&canvas, Some(&world_b), "16_pause.bmp");
 
-    // --- 17. Посуда кончилась: предупреждение сверху + красные нули на складе ---
+    // --- 17. Вся посуда грязная: предупреждение сверху + красные счётчики ---
     let no_inv = Inventory {
         hands: [None; 4],
         selected: 0,
         stock_croutons: 0,
         stock_sugar: 0,
         stock_glass: 0,
-        dirty_glasses: 0,
+        dirty_glasses: 3,
+        dirty_jars: 2,
+        dirty_bottles: 1,
         stock_jar: 0,
         stock_bottle: 0,
     };
@@ -673,7 +672,7 @@ pub fn run() {
         norm: norm_for(1),
         day_earned: 0,
         time_left: 60.0,
-        msg: "ПОСУДА КОНЧИЛАСЬ! КУПИТЕ У ОКНА СНАБЖЕНИЯ (E)".into(),
+        msg: "ПОСУДА ВСЯ ГРЯЗНАЯ! ИДИТЕ НА МОЙКУ (E)".into(),
         msg_t: 3.0,
         ..Default::default()
     };
@@ -686,7 +685,6 @@ pub fn run() {
         &no_inv,
         &empty_barrels,
         &no_qte,
-        &no_wash,
         &no_cool,
         &no_cust,
         2.2,
@@ -696,6 +694,117 @@ pub fn run() {
         &no_modal,
     );
     snap(&canvas, Some(&world_c), "17_noposuda.bmp");
+
+    // --- 18. Выбор грязной посуды на мойке (ТЗ №4): три карточки ---
+    let pick_modal = Modals {
+        modal: Modal::Sponge,
+        sponge: Sponge::default(), // стадия выбора
+        ..Default::default()
+    };
+    canvas.clear();
+    ui::draw_frame(
+        &mut canvas,
+        &font,
+        &warn_state,
+        &no_inv,
+        &empty_barrels,
+        &no_qte,
+        &no_cool,
+        &no_cust,
+        2.6,
+        &cam,
+        &map,
+        false,
+        &pick_modal,
+    );
+    snap(&canvas, Some(&world_c), "18_spongepick.bmp");
+
+    // --- 19. Мусорка (ТЗ №5): новый тайл у стены рядом с мойкой ---
+    let trash_cam = GameCam {
+        x: 5.2,
+        y: 4.2,
+        angle: std::f32::consts::PI, // взгляд на запад: мусорка (2,4), мойка, бочка
+    };
+    renderer.render(&map, &textures, &trash_cam, 1.0);
+    renderer.present();
+    write_bmp_world(&out.join("19_trash.bmp"), &renderer.rgba);
+
+    // --- 20. «Квас кончился» (ТЗ №1): бочка сразу помечена на мойку ---
+    let mut ran_barrels = Barrels::from_map(&map);
+    if let Some(b) = ran_barrels.map.get_mut(&keys[0]) {
+        b.phase = BarrelPhase::Ruined;
+        b.portions = 0;
+        b.ran_out = true;
+    }
+    renderer.render(&map, &textures, &cam, 1.0);
+    renderer.present();
+    let world_ran = renderer.rgba.clone();
+    let ran_state = GameState {
+        phase: Phase::Playing,
+        day: 3,
+        money: 21,
+        norm: norm_for(3),
+        day_earned: 40,
+        time_left: 240.0,
+        msg: "КВАС КОНЧИЛСЯ! ПОМОЙТЕ БОЧКУ (ДЕРЖИТЕ E)".into(),
+        msg_t: 3.0,
+        ..Default::default()
+    };
+    canvas.clear();
+    ui::draw_frame(
+        &mut canvas,
+        &font,
+        &ran_state,
+        &inv,
+        &ran_barrels,
+        &no_qte,
+        &no_cool,
+        &no_cust,
+        3.1,
+        &cam,
+        &map,
+        false,
+        &no_modal,
+    );
+    snap(&canvas, Some(&world_ran), "20_ranout.bmp");
+
+    // --- 21. Подсказка у прилавка (ТЗ №6): ничего не занято — панель есть ---
+    let hint_cam = GameCam {
+        x: 9.5,
+        y: 4.6,
+        angle: -std::f32::consts::FRAC_PI_2, // взгляд на север: прилавок (9,3)
+    };
+    renderer.render(&map, &textures, &hint_cam, 1.0);
+    renderer.present();
+    let world_hint = renderer.rgba.clone();
+    let hint_state = GameState {
+        phase: Phase::Playing,
+        day: 2,
+        money: 45,
+        norm: norm_for(2),
+        day_earned: 40,
+        time_left: 300.0,
+        msg: "КЛИЕНТ ЖДЁТ ЗА ПРИЛАВКОМ".into(),
+        msg_t: 3.0,
+        ..Default::default()
+    };
+    canvas.clear();
+    ui::draw_frame(
+        &mut canvas,
+        &font,
+        &hint_state,
+        &inv,
+        &barrels,
+        &no_qte,
+        &no_cool,
+        &no_cust,
+        4.2,
+        &hint_cam,
+        &map,
+        false,
+        &no_modal,
+    );
+    snap(&canvas, Some(&world_hint), "21_hint.bmp");
 
     println!("selftest: кадры записаны в {}/", out.display());
 }

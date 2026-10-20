@@ -22,6 +22,17 @@ impl HandItem {
     pub fn is_full(&self, v: Vessel) -> bool {
         matches!(self, HandItem::Full(w, _, _) if *w == v)
     }
+
+    /// Название для уведомлений (мусорка, выдача, взятие).
+    pub fn name(&self) -> String {
+        match self {
+            HandItem::Croutons(_) => "СУХАРИ".into(),
+            HandItem::Bucket => "ВЕДРО".into(),
+            HandItem::Sugar(_) => "САХАР С ИЗЮМОМ".into(),
+            HandItem::Empty(v, _) => format!("ПУСТЫЙ {}", v.name()),
+            HandItem::Full(v, _, _) => format!("ПОЛНЫЙ {}", v.name()),
+        }
+    }
 }
 
 #[derive(Resource)]
@@ -35,8 +46,12 @@ pub struct Inventory {
     /// постоянно, после питья стакан становится грязным, мойка возвращает
     /// его на склад. Покупать стаканы нельзя.
     pub stock_glass: u8,
-    /// Грязные стаканы, ждущие мойки (на краю прилавка/складе).
+    /// Грязная посуда, ждущие мойки (на краю прилавка/складе).
+    /// ТЗ №4: грязеют ВСЕ три вида — банки и бутылки тоже многоразовые,
+    /// окно снабжения их больше не продаёт.
     pub dirty_glasses: u8,
+    pub dirty_jars: u8,
+    pub dirty_bottles: u8,
     pub stock_jar: u8,
     pub stock_bottle: u8,
 }
@@ -50,9 +65,56 @@ impl Default for Inventory {
             stock_sugar: 0,
             stock_glass: 0,
             dirty_glasses: 0,
+            dirty_jars: 0,
+            dirty_bottles: 0,
             stock_jar: 0,
             stock_bottle: 0,
         }
+    }
+}
+
+impl Inventory {
+    /// Грязных посуды данного вида (ТЗ №4: считаем все три вида).
+    pub fn dirty_of(&self, v: Vessel) -> u8 {
+        match v {
+            Vessel::Glass => self.dirty_glasses,
+            Vessel::Jar => self.dirty_jars,
+            Vessel::Bottle => self.dirty_bottles,
+        }
+    }
+
+    /// Посуда после гостя уходит в пул грязи.
+    pub fn add_dirty(&mut self, v: Vessel) {
+        match v {
+            Vessel::Glass => self.dirty_glasses += 1,
+            Vessel::Jar => self.dirty_jars += 1,
+            Vessel::Bottle => self.dirty_bottles += 1,
+        }
+    }
+
+    /// Отмыть одну единицу: грязь уходит, чистая попадает на склад.
+    pub fn clean_one(&mut self, v: Vessel) {
+        let d = match v {
+            Vessel::Glass => &mut self.dirty_glasses,
+            Vessel::Jar => &mut self.dirty_jars,
+            Vessel::Bottle => &mut self.dirty_bottles,
+        };
+        *d = d.saturating_sub(1);
+        match v {
+            Vessel::Glass => self.stock_glass += 1,
+            Vessel::Jar => self.stock_jar += 1,
+            Vessel::Bottle => self.stock_bottle += 1,
+        }
+    }
+
+    /// Всего грязной посуды ждёт мойки.
+    pub fn total_dirty(&self) -> u8 {
+        self.dirty_glasses + self.dirty_jars + self.dirty_bottles
+    }
+
+    /// Всего чистой посуды на складе.
+    pub fn total_stock(&self) -> u8 {
+        self.stock_glass + self.stock_jar + self.stock_bottle
     }
 }
 

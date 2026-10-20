@@ -53,6 +53,10 @@ pub const BAR_Y: i32 = 672;
 pub const MSG_Y: i32 = 628;
 /// Полоска подсказки «что перед вами».
 pub const HINT_Y: i32 = 580;
+/// Панель шага обучения (ТЗ №6): полоски мини-игр начинаются с 506,
+/// панель высотой 88 стоит выше с запасом 40 px — наложений нет
+/// и высота не «прыгает» между шагами.
+pub const TUT_Y: i32 = 378;
 
 fn blink(t: f32, hz: f32) -> bool {
     (t * hz) as i32 % 2 == 0
@@ -77,7 +81,6 @@ pub fn draw_frame(
     inv: &Inventory,
     barrels: &Barrels,
     qte: &BrewQte,
-    wash: &crate::interact::WashQte,
     cool: &crate::interact::CoolQte,
     customers: &[CustView],
     t: f32,
@@ -92,17 +95,22 @@ pub fn draw_frame(
         Phase::Final => draw_final(canvas, font, t),
         Phase::Paused => {
             let bubbles = bubble_layout(customers, font, cam);
-            draw_hud(canvas, font, state, inv, barrels, qte, wash, cool, t, map, cam, &bubbles);
+            draw_hud(canvas, font, state, inv, barrels, qte, cool, t, map, cam, &bubbles, false);
             canvas.dim(150);
             draw_pause(canvas, font, state);
         }
         Phase::Playing | Phase::Tutorial => {
             let bubbles = bubble_layout(customers, font, cam);
             // предмет в руках — под HUD-слоем, чтобы плашки перекрывали его низ
-            if !qte.active && !wash.active && !cool.active {
+            if !qte.active && !cool.active && !modal.is_open() {
                 draw_viewmodel(canvas, inv, t, moving);
             }
-            draw_hud(canvas, font, state, inv, barrels, qte, wash, cool, t, map, cam, &bubbles);
+            // ТЗ №6: подсказка «что перед вами» не должна налезать на
+            // полоски мини-игр и открытую модалку.
+            let hud_busy = qte.active || cool.active || modal.is_open();
+            draw_hud(
+                canvas, font, state, inv, barrels, qte, cool, t, map, cam, &bubbles, hud_busy,
+            );
             draw_bubbles(canvas, font, &bubbles);
             if state.phase == Phase::Tutorial {
                 draw_tutorial(canvas, font, state, customers, cam, t);
@@ -115,6 +123,7 @@ pub fn draw_frame(
                         draw_supply_modal(canvas, font, state, modal)
                     }
                     crate::modals::Modal::VesselPick => draw_vesselpick_modal(canvas, font, inv),
+                    crate::modals::Modal::Sponge => draw_sponge_modal(canvas, font, inv, modal),
                     crate::modals::Modal::None => {}
                 }
             }
@@ -395,12 +404,13 @@ fn draw_hud(
     inv: &Inventory,
     barrels: &Barrels,
     qte: &BrewQte,
-    wash: &crate::interact::WashQte,
     cool: &crate::interact::CoolQte,
     t: f32,
     map: &Map,
     cam: &GameCam,
     bubbles: &[Bubble],
+    // ТЗ №6: подсказка не рисуется, пока на её месте мини-игра/модалка.
+    hud_busy: bool,
 ) {
     // --- Таблички бочек (верхний левый угол) ---
     let mut keys: Vec<(i32, i32)> = barrels.map.keys().copied().collect();
@@ -431,7 +441,14 @@ fn draw_hud(
                 if blink(t, 6.0) { col::LAMP } else { col::RED },
                 format!("Б{} ПЕРЕБРОД {}% {:.0}С!", i + 1, p as i32, seconds_to_next(b)),
             ),
-            BarrelPhase::Ruined => (col::RED, format!("Б{} ГРЯЗЬ! МОЙТЬ (E)", i + 1)),
+            BarrelPhase::Ruined => (
+                col::RED,
+                if b.ran_out {
+                    format!("Б{} КВАС КОНЧИЛСЯ — МОЙКА (E)", i + 1)
+                } else {
+                    format!("Б{} ГРЯЗЬ! МОЙТЬ (E)", i + 1)
+                },
+            ),
         };
         let x = 8;
         let y = 8 + i as i32 * 46;
@@ -489,9 +506,13 @@ fn draw_hud(
     }
 
     // --- «Нужна посуда» (верх по центру, мигает) ---
-    let posuda_nul = inv.stock_jar + inv.stock_bottle == 0;
-    if posuda_nul && state.phase == Phase::Playing && blink(t, 2.0) {
-        let warn = "ПОСУДА КОНЧИЛАСЬ! КУПИТЕ У ОКНА СНАБЖЕНИЯ (E)";
+    // ТЗ №4: банки/бутылки не покупаются — при нуле склада виновата грязь.
+    if inv.total_stock() == 0 && state.phase == Phase::Playing && blink(t, 2.0) {
+        let warn = if inv.total_dirty() > 0 {
+            "ПОСУДА ВСЯ ГРЯЗНАЯ! ИДИТЕ НА МОЙКУ (E)"
+        } else {
+            "ПОСУДЫ НЕТ — ВОЗЬМИТЕ СО СТЕЛЛАЖА (E)"
+        };
         let ww = font.w(warn, SZ_M) + 32;
         let x = (CV_W - ww) / 2;
         panel(c, x, 8, ww, 44);
@@ -554,22 +575,22 @@ fn draw_hud(
         blit_icon(c, &prop_icon(PropIcon::Sugar), x + 92, BAR_Y + 46, 2);
         put_stock(c, font, x + 126, BAR_Y + 52, inv.stock_sugar);
 
+        // ТЗ №4: три вида многоразовой посуды, под каждым — счётчик грязи.
         let vessels = [
-            (Vessel::Glass, inv.stock_glass),
-            (Vessel::Jar, inv.stock_jar),
-            (Vessel::Bottle, inv.stock_bottle),
+            (Vessel::Glass, inv.stock_glass, inv.dirty_glasses),
+            (Vessel::Jar, inv.stock_jar, inv.dirty_jars),
+            (Vessel::Bottle, inv.stock_bottle, inv.dirty_bottles),
         ];
         let mut ix = x + 190;
-        for (v, n) in vessels {
+        for (v, n, dg) in vessels {
             blit_icon(c, &vessel_icon(v, false), ix, BAR_Y + 44, 2);
             put_stock(c, font, ix + 4, BAR_Y + 76, n);
-            ix += 78;
-        }
-        // ТЗ №8: грязные стаканы ждут мойки — счётчик под стаканами
-        if inv.dirty_glasses > 0 {
-            let d = format!("ГРЯЗНЫХ: {}", inv.dirty_glasses);
-            let dx = x + 190;
-            font.draw(c, dx, BAR_Y + 96, &d, SZ_S, col::RED, 255);
+            // грязь ждёт мойки (E) — красным, в своей колонке, не шире неё
+            if dg > 0 {
+                let d = format!("ГРЯЗЬ:{dg}");
+                font.draw_fit_sh(c, ix - 2, BAR_Y + 96, 100, &d, SZ_S, col::RED, 255);
+            }
+            ix += 100;
         }
     }
 
@@ -636,7 +657,8 @@ fn draw_hud(
             Tile::Water => Some(("E", "КОЛОНКА - НАБРАТЬ ВЕДРО ЛЕДЯНОЙ ВОДЫ")),
             Tile::Shelf => Some(("E", "СТЕЛЛАЖ - ВЗЯТЬ ПУСТУЮ ПОСУДУ")),
             Tile::Supply => Some(("E", "ОКНО СНАБЖЕНИЯ - ЗАКУПКА СЫРЬЯ")),
-            Tile::Sink => Some(("E", "МОЙКА - ПОМЫТЬ ГРЯЗНЫЕ СТАКАНЫ")),
+            Tile::Sink => Some(("E", "МОЙКА - ОТМЫТЬ ГРЯЗНУЮ ПОСУДУ (ГУБКА)")),
+            Tile::Trash => Some(("E", "МУСОРКА - ВЫБРОСИТЬ ПРЕДМЕТ ИЗ РУК")),
             Tile::Barrel => {
                 if !qte.active {
                     Some(("E", "БОЧКА: ДЕРЖИТЕ E - РОЗЛИВ / РЕЦЕПТ"))
@@ -652,7 +674,9 @@ fn draw_hud(
         let w = font.w(text, SZ_S) + 100;
         // слева, чтобы не под предметом в руках (viewmodel по центру)
         let x = 8;
-        if !qte.active && !bubbles.iter().any(|b| b.hits(x, HINT_Y, w, 44)) {
+        // ТЗ №6: подсказка не должна налезать на полоски мини-игр (y 506..602)
+        // и на открытую модалку — в эти моменты её просто не показываем.
+        if !hud_busy && !bubbles.iter().any(|b| b.hits(x, HINT_Y, w, 44)) {
             panel(c, x, HINT_Y, w, 44);
             let kx = keycap(c, font, x + 10, HINT_Y + 6, 32, key);
             font.draw(c, x + kx + 16, HINT_Y + 12, text, SZ_S, col::LAMP, 255);
@@ -662,10 +686,6 @@ fn draw_hud(
     // --- Мини-игра ускорения брожения ---
     if qte.active {
         draw_qte(c, font, qte, barrels);
-    }
-    // --- Мини-игра мытья стаканов (ТЗ №8) ---
-    if wash.active || wash.flash != 0.0 {
-        draw_wash_qte(c, font, wash, inv);
     }
     // --- Мини-игра охлаждения бочки (ТЗ №9) ---
     if cool.active || cool.flash != 0.0 {
@@ -723,54 +743,6 @@ fn draw_qte(c: &mut Canvas, font: &Font, qte: &BrewQte, barrels: &Barrels) {
     if qte.flash.abs() > 0.05 {
         let (text, color) = if qte.flash > 0.0 {
             (format!("+{}%", QTE_BONUS as i32), col::GREEN)
-        } else {
-            ("МИМО!".to_string(), col::RED)
-        };
-        let fw = font.w(&text, SZ_L) + 24;
-        let fx = (CV_W - fw) / 2;
-        let fy = y - 46;
-        c.rect(fx, fy, fw, 40, col::SHAD, 235);
-        c.frame(fx, fy, fw, 40, color, 255);
-        font.draw_fit_sh(c, fx + 10, fy + 6, fw - 20, &text, SZ_L, color, 255);
-    }
-}
-
-/// Полоска мытья стаканов (ТЗ №8): перевёрнутый стакан, давление воды,
-/// 3 попадания в синюю зону смывают пену.
-fn draw_wash_qte(c: &mut Canvas, font: &Font, wash: &crate::interact::WashQte, inv: &Inventory) {
-    let w = 640i32;
-    let x = (CV_W - w) / 2;
-    let y = MSG_Y - 122;
-    let h = 96;
-
-    panel(c, x, y, w, h);
-    let title = format!(
-        "МЫТЬЁ СТАКАНОВ: ПРОБЕЛ В ЗОНУ ДАВЛЕНИЯ ({}/3)  ГРЯЗНЫХ: {}",
-        wash.hits, inv.dirty_glasses
-    );
-    font.draw_fit_sh(c, x + 10, y + 12, w - 20, &title, SZ_M, col::LAMP, 255);
-
-    // перевёрнутый стакан слева от полоски
-    blit_icon_rot(c, &vessel_icon(Vessel::Glass, false), x + 30, y + 64, 2.0, std::f32::consts::PI);
-
-    let bx = x + 70;
-    let bw = w - 96;
-    let by = y + 52;
-    let bh = 24;
-    c.rect(bx, by, bw, bh, col::METAL_D, 255);
-    c.frame(bx, by, bw, bh, col::BLACK, 255);
-    let z0 = bx + (bw as f32 * wash.zone0) as i32;
-    let zw = (((bw as f32) * (wash.zone1 - wash.zone0)) as i32).max(6);
-    let zone = if wash.flash > 0.0 { col::WHITE } else { col::SKY };
-    c.rect(z0, by + 2, zw, bh - 4, zone, 255);
-    c.frame(z0, by + 2, zw, bh - 4, col::BLACK, 180);
-    let rx = bx + ((bw - 10) as f32 * wash.pos) as i32;
-    c.rect(rx, by - 4, 10, bh + 8, col::LAMP, 255);
-    c.frame(rx, by - 4, 10, bh + 8, col::BLACK, 255);
-
-    if wash.flash.abs() > 0.05 {
-        let (text, color) = if wash.flash > 0.0 {
-            ("ПЕНА СМЫТА!".to_string(), col::WHITE)
         } else {
             ("МИМО!".to_string(), col::RED)
         };
@@ -858,7 +830,7 @@ fn draw_tutorial(
     let skip = "ПРОПУСТИТЬ";
     let w = (font.w(ts.text, ts_size).max(font.w(skip, SZ_S) + 70) + 72).max(520);
     let x = ((CV_W - w) / 2).max(8);
-    let y = HINT_Y - 96;
+    let y = TUT_Y;
     panel(c, x, y, w, 88);
     font.draw(c, x + 24, y + 14, ts.text, ts_size, col::LAMP, 255);
     let kx = keycap(c, font, x + 24, y + 52, 26, "T");
@@ -979,7 +951,8 @@ fn draw_menu(c: &mut Canvas, font: &Font, t: f32) {
     }
 }
 
-/// Модалка окна снабжения (ТЗ №3): ретро-панель с заклёпками, 4 товара.
+/// Модалка окна снабжения (ТЗ №3): ретро-панель с заклёпками, 2 товара
+/// (ТЗ №4: посуду здесь не продают — её возвращает мойка).
 fn draw_supply_modal(
     c: &mut Canvas,
     font: &Font,
@@ -988,7 +961,7 @@ fn draw_supply_modal(
 ) {
     use crate::modals::SupplyKind;
     let w = 900i32;
-    let h = 460i32;
+    let h = 340i32;
     let x = (CV_W - w) / 2;
     let y = (CV_H - h) / 2 - 20;
     panel(c, x, y, w, h);
@@ -1005,14 +978,9 @@ fn draw_supply_modal(
     let hint = "ESC ИЛИ E — ЗАКРЫТЬ";
     font.draw(c, x + w - 40 - font.w(hint, SZ_S), y + 96, hint, SZ_S, col::TILE, 255);
 
-    // карточки товаров (стаканы не продаются — ТЗ №8)
+    // карточки товаров (ТЗ №4: только сырьё — сухари и сахар)
     const ROW_H: i32 = 64;
-    let kinds = [
-        SupplyKind::Croutons,
-        SupplyKind::Sugar,
-        SupplyKind::Jar,
-        SupplyKind::Bottle,
-    ];
+    let kinds = [SupplyKind::Croutons, SupplyKind::Sugar];
     for (i, kind) in kinds.into_iter().enumerate() {
         let ry = y + 130 + i as i32 * (ROW_H + 10);
         c.rect(x + 40, ry, w - 80, ROW_H, col::PLASTER, 255);
@@ -1024,10 +992,6 @@ fn draw_supply_modal(
                 blit_icon(c, &prop_icon(PropIcon::Croutons), x + 120, ry + 16, 3)
             }
             SupplyKind::Sugar => blit_icon(c, &prop_icon(PropIcon::Sugar), x + 120, ry + 16, 3),
-            SupplyKind::Jar => blit_icon(c, &vessel_icon(Vessel::Jar, false), x + 120, ry + 16, 3),
-            SupplyKind::Bottle => {
-                blit_icon(c, &vessel_icon(Vessel::Bottle, false), x + 120, ry + 16, 3)
-            }
         }
         let name = kind.name();
         font.draw(c, x + 190, ry + 8, name, SZ_M, col::INK, 255);
@@ -1083,6 +1047,137 @@ fn draw_vesselpick_modal(c: &mut Canvas, font: &Font, inv: &Inventory) {
     }
     let hint = "ЦИФРА — ВЗЯТЬ В РУКИ. ESC ИЛИ E — ЗАКРЫТЬ";
     font.draw_fit_sh(c, x + 40, y + h - 40, w - 80, hint, SZ_S, col::TILE, 255);
+}
+
+/// Модалка мойки посуды (ТЗ №4): сначала выбор грязной посуды (1/2/3),
+/// затем мини-игра — губка протирает сетку грязи на крупной иконке.
+fn draw_sponge_modal(
+    c: &mut Canvas,
+    font: &Font,
+    inv: &Inventory,
+    modals: &crate::modals::Modals,
+) {
+    use crate::modals::{SpongeStage, SPONGE_N};
+    let w = 720i32;
+    let h = 520i32;
+    let x = (CV_W - w) / 2;
+    let y = (CV_H - h) / 2;
+    panel(c, x, y, w, h);
+    for (rx, ry) in [
+        (x + 14, y + 14),
+        (x + w - 22, y + 14),
+        (x + 14, y + h - 22),
+        (x + w - 22, y + h - 22),
+    ] {
+        c.rect(rx, ry, 8, 8, col::METAL, 255);
+        c.frame(rx, ry, 8, 8, col::BLACK, 255);
+    }
+    red_plate(c, x + 40, y + 24, w - 80, 54);
+    font.draw_fit_sh(c, x + 40, y + 36, w - 80, "МЫТЁ ПОСУДЫ", SZ_L, col::WHITE, 255);
+
+    let sp = &modals.sponge;
+    if sp.stage == SpongeStage::Picker {
+        // --- выбор: три вида грязной посуды ---
+        let slots = [
+            (Vessel::Glass, inv.dirty_glasses),
+            (Vessel::Jar, inv.dirty_jars),
+            (Vessel::Bottle, inv.dirty_bottles),
+        ];
+        let sw = (w - 100) / 3;
+        for (i, (v, n)) in slots.into_iter().enumerate() {
+            let sx = x + 40 + i as i32 * (sw + 10);
+            let sy = y + 110;
+            let card = if n > 0 { col::PLASTER } else { col::METAL_D };
+            c.rect(sx, sy, sw - 10, 250, card, 255);
+            c.frame(sx, sy, sw - 10, 250, col::BLACK, 255);
+            let _ = keycap(c, font, sx + 10, sy + 10, 40, &(i + 1).to_string());
+            blit_icon(c, &vessel_icon(v, false), sx + sw / 2 - 36, sy + 64, 4);
+            font.draw_fit_sh(
+                c,
+                sx,
+                sy + 140,
+                sw - 10,
+                v.name(),
+                SZ_M,
+                if n > 0 { col::INK } else { col::TILE },
+                255,
+            );
+            let cnt = format!("ГРЯЗНЫХ: {n}");
+            font.draw_fit_sh(
+                c,
+                sx,
+                sy + 184,
+                sw - 10,
+                &cnt,
+                SZ_L,
+                if n > 0 { col::RED_D } else { col::TILE_D },
+                255,
+            );
+            if n == 0 {
+                font.draw_fit_sh(c, sx, sy + 222, sw - 10, "ЧИСТО", SZ_S, col::GREEN, 255);
+            }
+        }
+        let hint = "ЦИФРА — НАЧАТЬ МЫТЬЁ. ESC ИЛИ E — ЗАКРЫТЬ";
+        font.draw_fit_sh(c, x + 40, y + h - 44, w - 80, hint, SZ_S, col::TILE, 255);
+        let left = format!("ВСЕГО ГРЯЗНОЙ ПОСУДЫ: {}", inv.total_dirty());
+        font.draw_fit_sh(c, x + 40, y + h - 76, w - 80, &left, SZ_S, col::LAMP, 255);
+    } else {
+        // --- протирание: сетка 8×8 на крупной иконке посуды ---
+        let cell = 16i32;
+        let grid = (SPONGE_N as i32) * cell;
+        let gx = x + 56;
+        let gy = y + 132;
+        c.rect(gx - 6, gy - 6, grid + 12, grid + 12, col::METAL_D, 255);
+        c.frame(gx - 6, gy - 6, grid + 12, grid + 12, col::BLACK, 255);
+        blit_icon(c, &vessel_icon(sp.vessel, false), gx, gy, cell / 2);
+        for i in 0..SPONGE_N * SPONGE_N {
+            if !sp.dirty[i] {
+                continue;
+            }
+            let dx = gx + (i % SPONGE_N) as i32 * cell;
+            let dy = gy + (i / SPONGE_N) as i32 * cell;
+            c.rect(dx, dy, cell, cell, [96, 66, 38], 190);
+            c.frame(dx, dy, cell, cell, [58, 38, 18], 200);
+            if (i * 7) % 3 == 0 {
+                c.rect(dx + 5, dy + 5, 5, 5, [58, 38, 18], 230);
+            }
+        }
+        // губка
+        let sx = gx + (sp.cx * cell as f32) as i32;
+        let sy = gy + (sp.cy * cell as f32) as i32;
+        c.rect(sx - 11, sy - 9, 22, 18, [236, 214, 120], 255);
+        c.rect(sx - 11, sy - 9, 22, 7, [252, 244, 190], 255);
+        c.frame(sx - 11, sy - 9, 22, 18, col::BLACK, 255);
+
+        // правая колонка: что моем и сколько стёрто
+        let rx = gx + grid + 40;
+        let rw = x + w - 40 - rx;
+        font.draw(c, rx, y + 128, sp.vessel.name(), SZ_L, col::LAMP, 255);
+        let done = format!("ВЫТЕРТО: {} ИЗ {}", sp.wiped, SPONGE_N * SPONGE_N);
+        font.draw(c, rx, y + 172, &done, SZ_M, col::WHITE, 255);
+        let bar_y = y + 210;
+        bar(c, rx, bar_y, rw, 24, sp.ratio(), col::KVASS_L);
+        // метка порога 80%
+        let tick = rx + 4 + ((rw - 8) as f32 * 0.8) as i32;
+        c.rect(tick, bar_y - 6, 3, 36, col::RED, 255);
+        font.draw(c, rx, bar_y + 34, "ПОРОГ 80% — И ЧИСТО", SZ_S, col::RED, 255);
+        let rest = format!("ЖДУТ МОЙКИ ЕЩЁ: {}", inv.total_dirty());
+        font.draw_fit_sh(c, rx, y + 300, rw, &rest, SZ_S, col::TILE, 255);
+
+        // легенда под сеткой
+        font.draw_fit_sh(
+            c,
+            gx - 6,
+            y + 132 + grid + 18,
+            grid + 12,
+            "СЕТКА ПОСУДЫ",
+            SZ_S,
+            col::TILE,
+            255,
+        );
+        let hint = "WASD ИЛИ СТРЕЛКИ — ГУБКА. ESC ИЛИ E — НАЗАД";
+        font.draw_fit_sh(c, x + 40, y + h - 44, w - 80, hint, SZ_S, col::TILE, 255);
+    }
 }
 
 fn draw_dayend(c: &mut Canvas, font: &Font, state: &GameState, t: f32) {

@@ -33,11 +33,31 @@ pub struct Renderer {
     pub indices: Vec<u8>,
     /// z-буфер по колонкам (глубина стены).
     pub zbuf: Vec<f32>,
-    /// Верхняя отрисованная строка стены по колонкам (для полуприлавка).
-    pub ztop: Vec<i32>,
+    /// Глубина НИЗКОЙ мебели по колонкам (прилавок/бочка/мусорка),
+    /// f32::MAX — в этой колонке низкой мебели нет. ТЗ №2: одной глубины
+    /// стены за мебелью мало — спрайт за прилавком «простреливал» её фасад.
+    pub zlow: Vec<f32>,
+    /// Верхняя строка силуэта низкой мебели (крышка) по колонкам:
+    /// спрайты глубже неё обрезаются ровно по этой линии.
+    pub zlow_top: Vec<i32>,
     colormap: [[u8; NUM_LIGHTS]; 24],
     /// RGBA выход.
     pub rgba: Vec<u8>,
+}
+
+/// Низкая мебель: за ней видно дальнюю стену, а спрайты режутся по её крыше.
+fn is_low(t: Tile) -> bool {
+    matches!(t, Tile::Counter | Tile::Barrel | Tile::Trash)
+}
+
+/// Насколько высоко поднимается низкая мебель (доля полной стены).
+fn low_frac(t: Tile) -> f32 {
+    match t {
+        Tile::Counter => 0.34,
+        Tile::Barrel => 0.55,
+        Tile::Trash => 0.45,
+        _ => 1.0,
+    }
 }
 
 impl Renderer {
@@ -45,7 +65,8 @@ impl Renderer {
         Self {
             indices: vec![0; SCREEN_W * SCREEN_H],
             zbuf: vec![0.0; SCREEN_W],
-            ztop: vec![0; SCREEN_W],
+            zlow: vec![f32::MAX; SCREEN_W],
+            zlow_top: vec![SCREEN_H as i32; SCREEN_W],
             colormap: build_colormap(),
             rgba: vec![0; SCREEN_W * SCREEN_H * 4],
         }
@@ -142,7 +163,7 @@ impl Renderer {
                         (map_y as f32 - cam.y + (1 - step_y) as f32 / 2.0) / rdy
                     })
                     .max(0.05);
-                    let low = matches!(t, Tile::Counter | Tile::Barrel);
+                    let low = is_low(t);
                     if first.is_none() {
                         first = Some((t, side, perp));
                         if !low {
@@ -169,16 +190,22 @@ impl Renderer {
                     break;
                 }
             }
-            let Some((hit_tile, side, perp)) = first else { continue };
-            // Прилавок/бочка — низкая мебель: покупателя за ним НЕЛЬЗЯ
-            // «резать» по кромке (баг «половина человека»). Ограничитель —
-            // только полная стена за мебелью (far); если её нет в кадре —
-            // глубина не ограничена.
-            if matches!(hit_tile, Tile::Counter | Tile::Barrel) {
-                self.zbuf[x] = far.unwrap_or(f32::MAX);
-            } else {
-                self.zbuf[x] = perp;
-            }
+            let Some((hit_tile, side, perp)) = first else {
+                // Луч не попал ни в что (на закрытой карте не бывает): зовём
+                // буферы в исходное, чтобы спрайты не ушли за «стену»
+                // с прошлого кадра (ТЗ №2: протёкший z-буфер).
+                self.zbuf[x] = f32::MAX;
+                self.zlow[x] = f32::MAX;
+                self.zlow_top[x] = SCREEN_H as i32;
+                continue;
+            };
+            let low = is_low(hit_tile);
+            // Прилавок/бочка/мусорка — низкая мебель: покупателя за ней НЕЛЬЗЯ
+            // «резать» по кромке (баг «половина человека»). Ограничитель
+            // спрайтов ПО ЗАДНЕЙ СТЕНЕ — far, а сама мебель учитывается
+            // отдельной парой zlow/zlow_top (ТЗ №2: фасад прилавка нельзя
+            // «простреливать» спрайтом, стоящим за ним).
+            self.zbuf[x] = if low { far.unwrap_or(f32::MAX) } else { perp };
             // Перспектива честная: высота стены — по реальному
             // перпендикулярному расстоянию (кламп расстояния давал
             // «сжатие» объектов вблизи: они переставали расти).
@@ -187,22 +214,51 @@ impl Renderer {
             // прилавок — низкая стена до пола, за ней виден дальняя стена и
             // покупатели. Кромка должна идти заметно ниже горизонта (а не
             // практически на нём, как было при 0.48 — тогда людей резало
-            // ровно посередине экрана). 0.40: видно от колен вверх, и человек
+            // ровно посередине экрана). 0.34: видно от колен вверх, и человек
             // читается как стоящий за прилавком, а не «на» нём.
-            let wall_h = match hit_tile {
-                // прилавок — низкая перегородка (покупатель виден по пояс),
-                // бочка — наполовину роста: не режет людей и читается кругом
-                Tile::Counter => (full_h as f32 * 0.34) as i32,
-                Tile::Barrel => (full_h as f32 * 0.55) as i32,
-                _ => full_h,
+            let frac = low_frac(hit_tile);
+            let wall_h = if low {
+                (full_h as f32 * frac) as i32
+            } else {
+                full_h
             };
             let end_raw = HORIZON + full_h / 2;
             let start_raw = end_raw - wall_h;
             let end = end_raw.min(SCREEN_H as i32);
             let start = start_raw.max(0).min(SCREEN_H as i32);
-            // Прилавок/бочка не отсекают спрайты по кромке: покупатель за
-            // низкой мебелью рисуется целиком (иначе — баг «половина человека»).
-            self.ztop[x] = 0;
+            // Геометрия крышки считается ЗДЕСЬ (а не в блоке отрисовки):
+            // её верхняя строка — это и есть линия, по которой спрайты за
+            // мебелью обрезаются. Если мебель достаёт до верха кадра
+            // (start == 0), крышки нет и всё за ней скрыто целиком.
+            let lid_band_top = if low {
+                // t выхода луча из тайла — ближайшая дальняя граница клетки
+                let fx = if rdx.abs() < 1e-6 {
+                    f32::MAX
+                } else if rdx > 0.0 {
+                    (map_x as f32 + 1.0 - cam.x) / rdx
+                } else {
+                    (map_x as f32 - cam.x) / rdx
+                };
+                let fy = if rdy.abs() < 1e-6 {
+                    f32::MAX
+                } else if rdy > 0.0 {
+                    (map_y as f32 + 1.0 - cam.y) / rdy
+                } else {
+                    (map_y as f32 - cam.y) / rdy
+                };
+                let perp_exit = fx.min(fy).max(perp + 0.05);
+                let full2 = SCREEN_H as f32 / perp_exit.max(0.2);
+                let y_back = (HORIZON as f32 + full2 * (0.5 - frac)) as i32;
+                if start > 0 {
+                    y_back.max(0).min(start)
+                } else {
+                    0
+                }
+            } else {
+                SCREEN_H as i32
+            };
+            self.zlow[x] = if low { perp } else { f32::MAX };
+            self.zlow_top[x] = lid_band_top;
             let wall_x = if side == 0 {
                 cam.y + perp * rdy
             } else {
@@ -235,8 +291,9 @@ impl Renderer {
                 let band = light_band(bright, BAYER4[(x & 3) as usize][(y & 3) as usize]);
                 idx[y as usize * SCREEN_W + x] = self.colormap[c as usize][band];
             }
-            // над прилавком/бочкой — дальняя стена (иначе виден только потолок)
-            if matches!(hit_tile, Tile::Counter | Tile::Barrel) && start > 0 {
+            // над прилавком/бочкой/мусоркой — дальняя стена (иначе виден
+            // только потолок)
+            if low && start > 0 {
                 if let Some((t2, side2, perp2)) = second {
                     let full2 = (SCREEN_H as f32 / perp2.max(0.2)) as i32;
                     let end2_raw = HORIZON + full2 / 2;
@@ -277,30 +334,14 @@ impl Renderer {
                 }
             }
             // Перспективная крышка низкой мебели (ТЗ №6): верхняя грань
-            // прилавка/бочки — от кромки фронта до задней кромки тайла.
-            // Клиент за прилавком считается низкой мебелью (ztop=0),
-            // крышка рисуется поверх дальних стен (честное перекрытие).
-            if matches!(hit_tile, Tile::Counter | Tile::Barrel) && start > 0 {
-                let frac = if hit_tile == Tile::Counter { 0.34f32 } else { 0.55 };
-                // t выхода луча из тайла — ближайшая дальняя граница клетки
-                let fx = if rdx.abs() < 1e-6 {
-                    f32::MAX
-                } else if rdx > 0.0 {
-                    (map_x as f32 + 1.0 - cam.x) / rdx
-                } else {
-                    (map_x as f32 - cam.x) / rdx
-                };
-                let fy = if rdy.abs() < 1e-6 {
-                    f32::MAX
-                } else if rdy > 0.0 {
-                    (map_y as f32 + 1.0 - cam.y) / rdy
-                } else {
-                    (map_y as f32 - cam.y) / rdy
-                };
-                let perp_exit = fx.min(fy).max(perp + 0.05);
-                let full2 = SCREEN_H as f32 / perp_exit.max(0.2);
-                let y_back = (HORIZON as f32 + full2 * (0.5 - frac)) as i32;
-                let band_top = y_back.max(0).min(start);
+            // прилавка/бочки/мусорки — от кромки фронта до задней кромки
+            // тайла. Покупатель за низкой мебелью считается низкой
+            // мебелью (zlow_top), крышка рисуется поверх дальних стен
+            // (честное перекрытие).
+            if low && start > 0 {
+                // геометрия (perp_exit/край крышки) посчитана до отрисовки
+                // фронта — она же задаёт линию обрезки спрайтов (zlow_top)
+                let band_top = lid_band_top;
                 let span = (start_raw - band_top).max(1);
                 for y in band_top..start {
                     let ty2 = (((y - band_top) as f32 * TEX_SIZE as f32 / span as f32) as usize)
@@ -391,22 +432,32 @@ impl Renderer {
                 let mid = ((x0 + x1) / 2).clamp(0, SCREEN_W as i32 - 1) as usize;
                 eprintln!(
                     "sprite {} ty={ty:.2} screen_x={screen_x} start_x={x0} end_x={x1} width={} \
-                     box_y=({y0})-({y1}) sprite_h={sprite_h} ztop={} zbuf={:.2}",
+                     box_y=({y0})-({y1}) sprite_h={sprite_h} zlow_top={} zlow={:.2} zbuf={:.2}",
                     kind.name(),
                     x1 - x0,
-                    self.ztop[mid],
+                    self.zlow_top[mid],
+                    self.zlow[mid],
                     self.zbuf[mid],
                 );
             }
             for x in x0..x1 {
-                // стена ближе спрайта — видна только её верхняя часть (над прилавком)
-                let occluded = self.zbuf[x as usize] < ty;
-                let ztop = self.ztop[x as usize];
+                // ТЗ №2: две глубины на колонку. Полная стена ближе спрайта —
+                // колонка закрыта целиком; низкая мебель ближе — спрайт
+                // обрезается ровно по её крыше (за прилавком видно только
+                // то, что выше его), а сам фасад «прострелить» нельзя.
+                let xi = x as usize;
+                let clip = if self.zbuf[xi] < ty {
+                    0
+                } else if self.zlow[xi] < ty {
+                    self.zlow_top[xi]
+                } else {
+                    SCREEN_H as i32
+                };
                 let tex_x = ((x - x_left) * crate::sprites::SPR_W as i32
                     / sprite_w.max(1) as i32)
                     .clamp(0, crate::sprites::SPR_W as i32 - 1) as usize;
                 for y in y0..y1 {
-                    if occluded && y >= ztop {
+                    if y >= clip {
                         continue;
                     }
                     // берём строку текстуры по НЕклампированной верхней точке —

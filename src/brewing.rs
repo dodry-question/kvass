@@ -62,6 +62,10 @@ pub struct Barrel {
     /// Шаг рецепта: 0 пусто, 1 сухари, 2 вода.
     pub step: u8,
     pub portions: u32,
+    /// ТЗ №1: квас кончился раньше, чем бочка испортилась — слили всё.
+    /// Такое состояние сразу помечается ИСПОРЧЕННОЙ («КВАС КОНЧИЛСЯ»),
+    /// иначе игрок стоял бы у «ГОТОВОЙ», но пустой бочки без подсказки.
+    pub ran_out: bool,
     /// Последний сигнал (прочитать и очистить).
     pub signal: Option<BarrelSignal>,
     pub flash: f32,
@@ -75,6 +79,7 @@ impl Barrel {
             phase: BarrelPhase::Empty,
             step: 0,
             portions: 0,
+            ran_out: false,
             signal: None,
             flash: 0.0,
             brew_time: BREW_TIME,
@@ -210,6 +215,7 @@ pub fn barrel_update(
                     let q = *p;
                     b.phase = BarrelPhase::Ready(q);
                     b.portions = BARREL_PORTIONS;
+                    b.ran_out = false; // новая варка — флаг «квас кончился» снят
                     b.signal = Some(BarrelSignal::Ready);
                 }
             }
@@ -225,6 +231,7 @@ pub fn barrel_update(
                 *p += dt * (PCT_RUINED - PCT_OVERRIPE) / OVERRIPE_TIME * CRITICAL_RATE;
                 if *p >= PCT_RUINED {
                     b.phase = BarrelPhase::Ruined;
+                    b.ran_out = false; // порча по времени, а не «слили всё»
                     b.signal = Some(BarrelSignal::Ruined);
                     dirty.0 += 1;
                 }

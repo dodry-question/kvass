@@ -107,11 +107,13 @@ pub fn give_start_package(state: &mut GameState, inv: &mut crate::inventory::Inv
     state.day_earned = 0;
     inv.stock_croutons = 2;
     inv.stock_sugar = 2;
-    // ТЗ №8: стаканы многоразовые — стартовый пул 6 штук, не покупаются.
+    // ТЗ №8/№4: посуда многоразовая — стартовый пул, не покупается.
     inv.stock_glass = 6;
-    inv.dirty_glasses = 0;
     inv.stock_jar = 2;
     inv.stock_bottle = 1;
+    inv.dirty_glasses = 0;
+    inv.dirty_jars = 0;
+    inv.dirty_bottles = 0;
     inv.hands = [None; 4];
 }
 

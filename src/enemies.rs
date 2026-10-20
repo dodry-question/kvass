@@ -219,6 +219,7 @@ pub fn hooligan_behavior(
                     if b.phase != BarrelPhase::Ruined {
                         b.phase = BarrelPhase::Ruined;
                         b.portions = 0;
+                        b.ran_out = false; // сломан, а не «слили всё»
                         dirty.0 += 1;
                         state.notify("БОЧКА СЛОМАНА! ПОДОЖДИТЕ 3 СЕК И МОЙТЕ (E)".into());
                     }
@@ -227,6 +228,9 @@ pub fn hooligan_behavior(
             h.smashed = true;
             crate::audio::play_sfx(&mut commands, &bank, "fooff", 0.9);
             c.say("ВОТ ТЕБЕ И КВАС!".into());
+            // ТЗ №3: после слома хулиган уходит по маршруту, а не замирает
+            // навсегда (Custom-состояние не двигается сам по себе).
+            c.state = CustState::Leaving;
             c.path = VecDeque::from([
                 Vec2::new(2.5, 1.5),
                 Vec2::new(6.5, 1.5),
