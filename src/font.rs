@@ -277,17 +277,18 @@ impl Font {
 
             for &px in &want {
                 let mut map: HashMap<char, Glyph> = HashMap::new();
-                // Квантуем глифы в чёрное/белое: растризуем в полном кегле,
-                // битмапа и метрики — в тех же единицах (никаких ×2):
-                // иначе глиф шире advance и буквы наезжают друг на друга.
-                let spx = (px as f32).max(10.0);
+                // Ретро-пиксель (ТЗ): растризуем в половинном кегле, квантуем
+                // в 1 бит и увеличиваем ×2 — жёсткие ступени в тон рэйкастеру.
+                // Битмапа И метрики — в одних ×2 единицах, иначе глиф шире
+                // advance и буквы наезжают друг на друга.
+                let spx = (px as f32 / 2.0).max(6.0);
                 // капс — верх «Н» над базовой линией
                 let (nm, _) = fnt.rasterize('Н', spx);
-                let cap = nm.ymin + nm.height as i32;
+                let cap = (nm.ymin + nm.height as i32) * 2;
                 let mut desc = 0i32;
                 for c in chars.clone() {
                     let (m, bmp) = fnt.rasterize(c, spx);
-                    let adv = (m.advance_width.round() as i32).max(2);
+                    let adv = ((m.advance_width * 2.0).round() as i32).max(2);
                     if c == ' ' || m.width == 0 || m.height == 0 {
                         map.insert(
                             c,
@@ -302,14 +303,18 @@ impl Font {
                         );
                         continue;
                     }
-                    desc = desc.max(-(m.ymin));
-                    let w2 = m.width as usize;
-                    let h2 = m.height as usize;
+                    desc = desc.max(-(m.ymin) * 2);
+                    let w2 = m.width as usize * 2;
+                    let h2 = m.height as usize * 2;
                     let mut cov = vec![0u8; w2 * h2];
                     for sy in 0..m.height as usize {
                         for sx in 0..m.width as usize {
-                            if bmp[sy * m.width + sx] >= 96 {
-                                cov[sy * w2 + sx] = 255;
+                            if bmp[sy * m.width + sx] >= 64 {
+                                for dy in 0..2 {
+                                    for dx in 0..2 {
+                                        cov[(sy * 2 + dy) * w2 + sx * 2 + dx] = 255;
+                                    }
+                                }
                             }
                         }
                     }
@@ -317,8 +322,8 @@ impl Font {
                         c,
                         Glyph {
                             adv,
-                            xmin: m.xmin,
-                            ymin: m.ymin,
+                            xmin: m.xmin * 2,
+                            ymin: m.ymin * 2,
                             w: w2,
                             h: h2,
                             cov,

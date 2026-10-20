@@ -219,28 +219,6 @@ fn gen_counter(t: &mut Vec<u8>) {
             } else if y == 7 || y == 8 {
                 // тень под кромкой — держит единство на всю длину
                 if y == 7 { idx::WOOD_DARK } else { idx::SHADOW }
-            } else if (26..42).contains(&y) {
-                // единая красная лента «КВАС»: белая штриховка сверху и снизу
-                // идёт непрерывно по всему прилавку (без вертикальных швов)
-                if y == 26 || y == 41 {
-                    idx::WHITE
-                } else if y == 27 || y == 40 {
-                    if (x / 4) % 2 == 0 {
-                        idx::PLASTER
-                    } else {
-                        idx::RED_DARK
-                    }
-                } else if (30..38).contains(&y) {
-                    // буквы-заглушки: светлые штрихи на красном
-                    let on = (x % 11 >= 2 && x % 11 <= 5) && (y == 33 || y == 34);
-                    if on {
-                        idx::PLASTER
-                    } else {
-                        noisy(&mut rng, idx::RED, idx::RED_DARK, 0.08)
-                    }
-                } else {
-                    noisy(&mut rng, idx::RED, idx::RED_DARK, 0.1)
-                }
             } else if y >= 52 {
                 // цоколь — тёмное дерево до пола
                 if y == 52 {
@@ -249,11 +227,9 @@ fn gen_counter(t: &mut Vec<u8>) {
                     noisy(&mut rng, idx::WOOD_DARK, idx::SHADOW, 0.1)
                 }
             } else {
-                // фасад: сплошные доски, шов мягкий и редкий — прилавок один
+                // чистый деревянный фасад (ТЗ: без красных лент и заплаток)
                 let seam = x % 21 == 20;
-                if seam {
-                    idx::WOOD_DARK
-                } else if y % 7 == 0 {
+                if seam || y % 7 == 0 {
                     idx::WOOD_DARK
                 } else {
                     noisy(&mut rng, idx::WOOD_LIGHT, idx::WOOD_DARK, 0.1)
@@ -263,23 +239,23 @@ fn gen_counter(t: &mut Vec<u8>) {
         }
     }
 
-    // Кассовый аппарат на фасаде прилавка (x 34..62, y 9..25): металлический
-    // корпус, дисплей-лампа, клавиши и чековая бумага.
+    // Кассовый аппарат на фасаде (ТЗ): по центру прилавка — корпус, дисплей
+    // с суммой, поле клавиш и чековая лента справа.
     for y in 9..26 {
-        for x in 34..62 {
-            let c = if y == 9 || x == 34 || x == 61 || y == 25 {
+        for x in 16..48 {
+            let c = if y == 9 || x == 16 || x == 47 || y == 25 {
                 idx::BLACK
-            } else if x >= 42 && x <= 52 && (10..14).contains(&y) {
-                // дисплей: тёмный фон с янтарным числом
-                if y == 11 && x >= 44 && x <= 49 {
+            } else if x >= 22 && x <= 40 && (10..14).contains(&y) {
+                // дисплей: тёмный фон с янтарной суммой
+                if y == 11 && x >= 25 && x <= 36 {
                     idx::LAMP
                 } else {
                     idx::SHADOW
                 }
-            } else if (15..24).contains(&y) && (x - 36) % 6 >= 1 && (x - 36) % 6 <= 4 {
+            } else if (15..24).contains(&y) && (x - 18) % 6 >= 1 && (x - 18) % 6 <= 4 {
                 // поле клавиш
                 let row = y / 5;
-                let col_key = (x - 36) / 6;
+                let col_key = (x - 18) / 6;
                 let key_on = (row + col_key) % 2 == 0;
                 if y % 5 == 4 {
                     idx::BLACK
@@ -288,8 +264,8 @@ fn gen_counter(t: &mut Vec<u8>) {
                 } else {
                     idx::PLASTER
                 }
-            } else if x >= 56 {
-                // справа — чековая бумага
+            } else if x >= 41 {
+                // справа — чековая лента
                 if (12..23).contains(&y) {
                     idx::WHITE
                 } else {
