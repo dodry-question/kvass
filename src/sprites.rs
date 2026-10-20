@@ -1,11 +1,58 @@
 //! Процедурные спрайты NPC (32x64) и иконки посуды (16x16), индексы палитры.
 //! 255 = прозрачный пиксель.
 
+use bevy::prelude::{Component, Vec2};
+
 use crate::palette::idx;
 
 pub const TRANSPARENT: u8 = 255;
 pub const SPR_W: usize = 32;
 pub const SPR_H: usize = 64;
+
+/// Рост NPC относительно полной стены-тайла (1.0 = стена до потолка).
+pub const NPC_SCALE: f32 = 0.75;
+/// Рост урны (ТЗ №5): 0.5 стены ≈ 1.0 м — «по пояс» человеку (NPC 0.75 ≈ 1.75 м).
+pub const TRASH_SCALE: f32 = 0.5;
+/// На каком расстоянии от статичного предмета срабатывает E
+/// (игрок подошёл вплотную; тайловые станции в приоритете — см. interact).
+pub const PROP_REACH: f32 = 1.3;
+
+/// Статичные предметы интерьера — билборд-спрайты (не NPC, не тайлы).
+/// ТЗ №5: мусорка должна стоять у стены как предмет, а не стеной-кубом.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PropKind {
+    /// Советская металлическая урна на ножках.
+    TrashBin,
+}
+
+impl PropKind {
+    pub fn name(self) -> &'static str {
+        match self {
+            PropKind::TrashBin => "МУСОРКА",
+        }
+    }
+    /// Рост относительно стены (см. TRASH_SCALE).
+    pub fn scale(self) -> f32 {
+        match self {
+            PropKind::TrashBin => TRASH_SCALE,
+        }
+    }
+    /// Подсказка «что перед вами», если игрок подошёл близко.
+    pub fn hint(self) -> Option<(&'static str, &'static str)> {
+        match self {
+            PropKind::TrashBin => Some(("E", "МУСОРКА - ВЫБРОСИТЬ ПРЕДМЕТ ИЗ РУК")),
+        }
+    }
+}
+
+/// Сущность статичного предмета: спавнится в setup(), рисуется той же
+/// billboard-системой, что и покупатели (`Renderer::draw_props`).
+#[derive(Component, Clone, Copy, PartialEq, Debug)]
+pub struct WorldProp {
+    pub kind: PropKind,
+    /// Координаты на полу (центр «ножек» спрайта).
+    pub pos: Vec2,
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum NpcKind {
@@ -35,6 +82,8 @@ impl NpcKind {
 pub struct SpriteSheet {
     /// npc[kind][y*32+x]
     pub npc: Vec<Vec<u8>>,
+    /// prop[kind][y*32+x] — статичные предметы интерьера
+    pub props: Vec<Vec<u8>>,
 }
 
 /// Пиксель в буфере шириной `w` (границы — по фактической длине буфера).
@@ -68,12 +117,108 @@ impl SpriteSheet {
             person(NpcKind::Hooligan),
             person(NpcKind::Sanepid),
         ];
-        Self { npc }
+        let props = vec![trash_bin()];
+        Self { npc, props }
     }
 
     pub fn npc_sprite(&self, k: NpcKind) -> &[u8] {
         &self.npc[k as usize]
     }
+
+    pub fn prop_sprite(&self, k: crate::sprites::PropKind) -> &[u8] {
+        &self.props[k as usize]
+    }
+}
+
+/// Урна-мусорка (ТЗ №5): металлическая бадья на ножках, широкая крышка-обод,
+/// торчат скомканные бумажки. Нижняя строка буфера = пол (спрайт стоит на
+/// полу), рост задаётся масштабом `PropKind::scale` — «по пояс», не монумент.
+fn trash_bin() -> Vec<u8> {
+    let mut s = vec![TRANSPARENT; SPR_W * SPR_H];
+    let w = SPR_W;
+    let body = idx::METAL_DARK; // тёмный корпус — контрастирует со светлым кафелем
+    let dark = idx::SHADOW;
+
+    // скомканный мусор поверх крышки — блобы, а не сетка
+    for (x, y, c) in [
+        (10, 11, idx::PLASTER),
+        (11, 12, idx::WHITE),
+        (12, 11, idx::PLASTER),
+        (16, 10, idx::WHITE),
+        (17, 11, idx::PLASTER),
+        (20, 12, idx::RED_DARK), // обёртка
+        (21, 11, idx::PLASTER),
+        (24, 12, idx::GREEN), // огрызок
+    ] {
+        put(&mut s, w, x, y, c);
+        put(&mut s, w, x, y + 1, c);
+    }
+
+    // крышка: купол и широкий обод (самая широкая часть урны)
+    for x in 7..25 {
+        put(&mut s, w, x, 13, idx::BLACK);
+        put(&mut s, w, x, 14, body);
+        put(&mut s, w, x, 15, idx::METAL);
+        put(&mut s, w, x, 16, idx::PLASTER); // блик по куполу
+        put(&mut s, w, x, 17, body);
+    }
+    block(&mut s, w, 2, 18, 28, 4, idx::METAL); // обод — светлый металл
+    for x in 3..29 {
+        put(&mut s, w, x, 19, idx::PLASTER); // светлая кромка обода
+    }
+
+    // тело: сужается книзу, объём (тёмные края + блик) и точечная грязь
+    for y in 22..57 {
+        let inset = if y >= 50 {
+            3
+        } else if y >= 40 {
+            2
+        } else if y >= 30 {
+            1
+        } else {
+            0
+        };
+        let x0 = 4 + inset;
+        let x1 = 28 - inset;
+        let width = x1 - x0;
+        let mid = width / 2;
+        for x in x0..x1 {
+            let rel = x - x0;
+            // мультипликативный хэш — рассыпанные точки, НЕ диагональные линии
+            let h = (x as u32).wrapping_mul(2_654_435_761) ^ (y as u32).wrapping_mul(40_503);
+            let c = if rel == 0 || rel == width - 1 {
+                idx::BLACK // контур
+            } else if rel < 3 || rel >= width - 3 {
+                dark // тень по краям — объём цилиндра
+            } else if rel == mid || rel == mid - 1 {
+                if h & 7 == 0 {
+                    body
+                } else {
+                    idx::METAL // вертикальный блик с мелкими «царапинами»
+                }
+            } else if h % 37 == 0 {
+                idx::LEAVES // зеленоватая грязь («грязно-зелёная»)
+            } else if h % 23 == 0 {
+                idx::METAL // потёртости
+            } else {
+                body
+            };
+            put(&mut s, w, x, y, c);
+        }
+        // рёбра жёсткости — светлые линии на тёмном корпусе
+        if y == 30 || y == 38 || y == 46 {
+            for x in (x0 + 2)..(x1 - 2) {
+                put(&mut s, w, x, y, idx::METAL);
+            }
+        }
+    }
+
+    // дно и три ножки (спрайт достаёт до нижней строки буфера — стоит на полу)
+    block(&mut s, w, 5, 57, 22, 3, idx::METAL_DARK);
+    for &lx in [6, 14, 22].iter() {
+        block(&mut s, w, lx, 60, 4, 4, idx::METAL_DARK);
+    }
+    s
 }
 
 /// Моделка 32x64 с уникальным образом для каждого типа.

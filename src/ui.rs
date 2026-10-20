@@ -88,6 +88,8 @@ pub fn draw_frame(
     map: &Map,
     moving: bool,
     modal: &crate::modals::Modals,
+    // ТЗ №5: статичные предметы-спрайты (урна) — подсказка по близости.
+    props: &[crate::sprites::WorldProp],
 ) {
     match state.phase {
         Phase::Menu => draw_menu(canvas, font, t),
@@ -95,7 +97,9 @@ pub fn draw_frame(
         Phase::Final => draw_final(canvas, font, t),
         Phase::Paused => {
             let bubbles = bubble_layout(customers, font, cam);
-            draw_hud(canvas, font, state, inv, barrels, qte, cool, t, map, cam, &bubbles, false);
+            draw_hud(
+                canvas, font, state, inv, barrels, qte, cool, t, map, cam, &bubbles, false, props,
+            );
             canvas.dim(150);
             draw_pause(canvas, font, state);
         }
@@ -110,6 +114,7 @@ pub fn draw_frame(
             let hud_busy = qte.active || cool.active || modal.is_open();
             draw_hud(
                 canvas, font, state, inv, barrels, qte, cool, t, map, cam, &bubbles, hud_busy,
+                props,
             );
             draw_bubbles(canvas, font, &bubbles);
             if state.phase == Phase::Tutorial {
@@ -411,6 +416,8 @@ fn draw_hud(
     bubbles: &[Bubble],
     // ТЗ №6: подсказка не рисуется, пока на её месте мини-игра/модалка.
     hud_busy: bool,
+    // ТЗ №5: предметы-спрайты (урна-мусорка) — подсказка по близости.
+    props: &[crate::sprites::WorldProp],
 ) {
     // --- Таблички бочек (верхний левый угол) ---
     let mut keys: Vec<(i32, i32)> = barrels.map.keys().copied().collect();
@@ -651,14 +658,14 @@ fn draw_hud(
     } else {
         let fx = cam.x + cam.angle.cos() * 0.9;
         let fy = cam.y + cam.angle.sin() * 0.9;
-        match map.get(fx.floor() as i32, fy.floor() as i32) {
+        let tile_label: Option<(&str, &str)> = match map.get(fx.floor() as i32, fy.floor() as i32)
+        {
             Tile::Croutons => Some(("E", "СУХАРИ - ВЗЯТЬ ГОРСТЬ")),
             Tile::Sugar => Some(("E", "САХАР С ИЗЮМОМ - ВЗЯТЬ")),
             Tile::Water => Some(("E", "КОЛОНКА - НАБРАТЬ ВЕДРО ЛЕДЯНОЙ ВОДЫ")),
             Tile::Shelf => Some(("E", "СТЕЛЛАЖ - ВЗЯТЬ ПУСТУЮ ПОСУДУ")),
             Tile::Supply => Some(("E", "ОКНО СНАБЖЕНИЯ - ЗАКУПКА СЫРЬЯ")),
             Tile::Sink => Some(("E", "МОЙКА - ОТМЫТЬ ГРЯЗНУЮ ПОСУДУ (ГУБКА)")),
-            Tile::Trash => Some(("E", "МУСОРКА - ВЫБРОСИТЬ ПРЕДМЕТ ИЗ РУК")),
             Tile::Barrel => {
                 if !qte.active {
                     Some(("E", "БОЧКА: ДЕРЖИТЕ E - РОЗЛИВ / РЕЦЕПТ"))
@@ -668,7 +675,16 @@ fn draw_hud(
             }
             Tile::Counter => Some(("E", "ПРИЛАВОК - ОТДАТЬ КВАС ПОКУПАТЕЛЮ")),
             _ => None,
-        }
+        };
+        // ТЗ №5: мусорка — спрайт, а не тайл: подсказка по близости к предмету.
+        tile_label.or_else(|| {
+            props
+                .iter()
+                .find(|p| {
+                    (Vec2::new(cam.x, cam.y) - p.pos).length() < crate::sprites::PROP_REACH
+                })
+                .and_then(|p| p.kind.hint())
+        })
     };
     if let Some((key, text)) = label {
         let w = font.w(text, SZ_S) + 100;

@@ -70,6 +70,7 @@ pub fn interact(
     mut modal: ResMut<Modals>,
     mut cool: ResMut<CoolQte>,
     mut customers: Query<(Entity, &mut Customer)>,
+    props: Query<&crate::sprites::WorldProp>,
     mut game_rng: ResMut<GameRng>,
     mut commands: Commands,
     bank: Res<crate::audio::SoundBank>,
@@ -133,22 +134,6 @@ pub fn interact(
                     "МЫТЁ ПОСУДЫ: [1] СТАКАН {} [2] БАНКА {} [3] БУТЫЛКА {}",
                     inv.dirty_glasses, inv.dirty_jars, inv.dirty_bottles
                 ));
-            }
-        }
-        Tile::Trash => {
-            // ТЗ №5: выбросить первый занятый слот (или выбранный, если он занят).
-            let slot = if inv.hands[inv.selected].is_some() {
-                Some(inv.selected)
-            } else {
-                inv.hands.iter().position(|h| h.is_some())
-            };
-            let dumped = slot.and_then(|s| inv.hands[s].take());
-            match dumped {
-                Some(item) => {
-                    crate::audio::play_sfx(&mut commands, &bank, "fooff", 0.7);
-                    state.notify(format!("ВЫБРОШЕНО: {}", item.name()));
-                }
-                None => state.notify("РУКИ ПУСТЫ — ЧЕГО ВЫБРАСЫВАТЬ?".into()),
             }
         }
         Tile::Barrel => {
@@ -311,7 +296,33 @@ pub fn interact(
                 }
             }
         }
-        _ => {}
+        // Тайл-пол/стена. ТЗ №5: мусорка — спрайт (не тайл-стена): срабатывает
+        // по близости. Тайловые станции в приоритете — стоя у мойки, E по-прежнему
+        // моет посуду, а не выбрасывает.
+        _ => {
+            let Some(p) = props
+                .iter()
+                .find(|p| (Vec2::new(cam.x, cam.y) - p.pos).length() < crate::sprites::PROP_REACH)
+            else {
+                return;
+            };
+            if p.kind == crate::sprites::PropKind::TrashBin {
+                // Выбросить первый занятый слот (или выбранный, если он занят).
+                let slot = if inv.hands[inv.selected].is_some() {
+                    Some(inv.selected)
+                } else {
+                    inv.hands.iter().position(|h| h.is_some())
+                };
+                let dumped = slot.and_then(|s| inv.hands[s].take());
+                match dumped {
+                    Some(item) => {
+                        crate::audio::play_sfx(&mut commands, &bank, "fooff", 0.7);
+                        state.notify(format!("ВЫБРОШЕНО: {}", item.name()));
+                    }
+                    None => state.notify("РУКИ ПУСТЫ — ЧЕГО ВЫБРАСЫВАТЬ?".into()),
+                }
+            }
+        }
     }
 }
 

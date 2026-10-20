@@ -47,7 +47,7 @@ pub struct Renderer {
 
 /// Низкая мебель: за ней видно дальнюю стену, а спрайты режутся по её крыше.
 fn is_low(t: Tile) -> bool {
-    matches!(t, Tile::Counter | Tile::Barrel | Tile::Trash)
+    matches!(t, Tile::Counter | Tile::Barrel)
 }
 
 /// Насколько высоко поднимается низкая мебель (доля полной стены).
@@ -55,7 +55,6 @@ fn low_frac(t: Tile) -> f32 {
     match t {
         Tile::Counter => 0.34,
         Tile::Barrel => 0.55,
-        Tile::Trash => 0.45,
         _ => 1.0,
     }
 }
@@ -373,11 +372,68 @@ impl Renderer {
         }
     }
 
-    /// Billboard-спрайты 32x64 с отсечением по z-буферу колонок.
+    /// NPC-спрайты 32x64: рост `NPC_SCALE`, отсечение по z-буферу колонок.
     pub fn draw_sprites(
         &mut self,
         sheet: &crate::sprites::SpriteSheet,
         sprites: &[(bevy::prelude::Vec2, crate::sprites::NpcKind)],
+        cam: &GameCam,
+        flicker: f32,
+    ) {
+        // сортировка: дальние первыми (z-порядок для billboard-ов)
+        let mut list: Vec<(f32, &[u8], bevy::prelude::Vec2, f32, &str)> = sprites
+            .iter()
+            .map(|(pos, kind)| {
+                (
+                    (*pos - bevy::prelude::Vec2::new(cam.x, cam.y)).length_squared(),
+                    sheet.npc_sprite(*kind),
+                    *pos,
+                    crate::sprites::NPC_SCALE,
+                    kind.name(),
+                )
+            })
+            .collect();
+        list.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
+        for (_, data, pos, scale, name) in list {
+            self.draw_billboard(data, pos, scale, name, cam, flicker);
+        }
+    }
+
+    /// Статичные предметы интерьера (ТЗ №5: урна-мусорка) — тот же
+    /// билборд-пайплайн, что у NPC, но со своим масштабом роста.
+    pub fn draw_props(
+        &mut self,
+        sheet: &crate::sprites::SpriteSheet,
+        props: &[crate::sprites::WorldProp],
+        cam: &GameCam,
+        flicker: f32,
+    ) {
+        let mut list: Vec<(f32, &[u8], bevy::prelude::Vec2, f32, &str)> = props
+            .iter()
+            .map(|p| {
+                (
+                    (p.pos - bevy::prelude::Vec2::new(cam.x, cam.y)).length_squared(),
+                    sheet.prop_sprite(p.kind),
+                    p.pos,
+                    p.kind.scale(),
+                    p.kind.name(),
+                )
+            })
+            .collect();
+        list.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
+        for (_, data, pos, scale, name) in list {
+            self.draw_billboard(data, pos, scale, name, cam, flicker);
+        }
+    }
+
+    /// Один billboard 32x64: проекция по углу камеры, отсечение колонками
+    /// (полная стена / крышка низкой мебели), колормап + дизер Байера.
+    fn draw_billboard(
+        &mut self,
+        data: &[u8],
+        pos: bevy::prelude::Vec2,
+        scale: f32,
+        name: &str,
         cam: &GameCam,
         flicker: f32,
     ) {
@@ -386,28 +442,18 @@ impl Renderer {
         let plane_x = -dir_y * FOV_SCALE;
         let plane_y = dir_x * FOV_SCALE;
         let inv_det = 1.0 / (plane_x * dir_y - dir_x * plane_y);
-        // сортировка: дальние первыми
-        let mut order: Vec<usize> = (0..sprites.len()).collect();
-        order.sort_by(|&a, &b| {
-            let da = (sprites[a].0 - bevy::prelude::Vec2::new(cam.x, cam.y)).length_squared();
-            let db = (sprites[b].0 - bevy::prelude::Vec2::new(cam.x, cam.y)).length_squared();
-            db.partial_cmp(&da).unwrap()
-        });
-        for &si in &order {
-            let (pos, kind) = &sprites[si];
-            let sx = pos.x - cam.x;
-            let sy = pos.y - cam.y;
+        let sx = pos.x - cam.x;
+        let sy = pos.y - cam.y;
             let tx = inv_det * (dir_y * sx - dir_x * sy);
             let ty = inv_det * (-plane_y * sx + plane_x * sy);
             if ty <= 0.15 {
-                continue;
+                return; // объект за спиной/вплотную — не рисуем
             }
             let screen_x = ((SCREEN_W as f32 / 2.0) * (1.0 + tx / ty)) as i32;
-            // Рост человека = доля полной стены-тайла (sprite_h = SCREEN_H/ty*SCALE,
-            // полная стена = SCREEN_H/ty). 1.2 делал «переростков» с головой над
-            // стеной; 0.75 — человек ~3/4 стены, голова ниже кромки, читается цельным.
-            const SPRITE_SCALE: f32 = 0.75;
-            let sprite_h = ((SCREEN_H as f32 / ty * SPRITE_SCALE).clamp(1.0, SCREEN_H as f32)) as usize;
+            // Рост = доля полной стены-тайла (sprite_h = SCREEN_H/ty*scale,
+            // полная стена = SCREEN_H/ty). NPC: 0.75 (иначе «переростки» с
+            // головой над стеной); урна (ТЗ №5): 0.45 — по пояс человеку.
+            let sprite_h = ((SCREEN_H as f32 / ty * scale).clamp(1.0, SCREEN_H as f32)) as usize;
             let sprite_w = sprite_h / 2; // 64x128 спрайты
             let feet = HORIZON as f32 + (SCREEN_H as i32 - HORIZON) as f32 / ty;
             // Клампим только диапазон отрисовки, а НЕ начало спрайта:
@@ -426,14 +472,13 @@ impl Renderer {
             let x_left = screen_x - sprite_w as i32 / 2;
             let x0 = x_left.max(0);
             let x1 = (screen_x + sprite_w as i32 / 2).min(SCREEN_W as i32);
-            let data = sheet.npc_sprite(*kind);
             let bright = (1.0 - ty / MAX_DIST).max(0.1) * flicker;
             if std::env::var("KVASS_DEBUG_SPRITES").is_ok() {
                 let mid = ((x0 + x1) / 2).clamp(0, SCREEN_W as i32 - 1) as usize;
                 eprintln!(
                     "sprite {} ty={ty:.2} screen_x={screen_x} start_x={x0} end_x={x1} width={} \
                      box_y=({y0})-({y1}) sprite_h={sprite_h} zlow_top={} zlow={:.2} zbuf={:.2}",
-                    kind.name(),
+                    name,
                     x1 - x0,
                     self.zlow_top[mid],
                     self.zlow[mid],
@@ -479,6 +524,5 @@ impl Renderer {
                         self.colormap[c as usize][band];
                 }
             }
-        }
     }
 }

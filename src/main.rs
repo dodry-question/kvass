@@ -90,7 +90,7 @@ fn window_setup() -> Window {
 }
 
 /// Идентификатор сборки — выводится в HUD для проверки версии exe (ТЗ).
-pub const BUILD_ID: &str = "BUILD 2026-10-20.12 SPONGE-TRASH";
+pub const BUILD_ID: &str = "BUILD 2026-10-20.13 TRASH-SPRITE";
 
 pub fn assets_root() -> std::path::PathBuf {
     let mut bases: Vec<std::path::PathBuf> = Vec::new();
@@ -263,6 +263,13 @@ fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
         },
     ));
 
+    // ТЗ №5: мусорка — статичный билборд-спрайт (а не тайл-стена), стоит
+    // в углу у мойки. Логика E — в interact::interact по близости.
+    commands.spawn(sprites::WorldProp {
+        kind: sprites::PropKind::TrashBin,
+        pos: Vec2::new(2.3, 4.3),
+    });
+
     // Канвас UI 1280×800 (2× буфер мира) — прозрачный слой поверх мира.
     let mut ui_image = Image::new(
         Extent3d {
@@ -369,6 +376,7 @@ fn render_frame(
     cool: Res<interact::CoolQte>,
     modal: Res<modals::Modals>,
     customers: Query<&Customer>,
+    props: Query<&sprites::WorldProp>,
     mut world: ResMut<World>,
     mut ui_canvas: ResMut<Canvas>,
     mut images: ResMut<Assets<Image>>,
@@ -381,6 +389,7 @@ fn render_frame(
     world.flicker = (base + drop).clamp(0.6, 1.0);
 
     // мир
+    let prop_list: Vec<sprites::WorldProp> = props.iter().copied().collect();
     let mut rendered = false;
     if matches!(state.phase, Phase::Playing | Phase::Tutorial) {
         let World {
@@ -393,6 +402,8 @@ fn render_frame(
         renderer.render(&map, textures, &cam, *flicker);
         let list: Vec<_> = customers.iter().map(|c| (c.pos, c.kind)).collect();
         renderer.draw_sprites(sprites, &list, &cam, *flicker);
+        // статичные предметы (ТЗ №5: урна-мусорка) — тот же billboard-пайплайн
+        renderer.draw_props(sprites, &prop_list, &cam, *flicker);
         rendered = true;
     }
 
@@ -433,6 +444,7 @@ fn render_frame(
             &map,
             moving,
             &modal,
+            &prop_list,
         );
     }
 

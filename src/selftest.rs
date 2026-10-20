@@ -58,6 +58,7 @@ pub fn run() {
     let no_qte = BrewQte::default();
     let no_cool = CoolQte::default();
     let no_modal = Modals::default();
+    let no_props: &[crate::sprites::WorldProp] = &[];
     let no_cust: Vec<ui::CustView> = Vec::new();
     let empty_inv = Inventory::default();
 
@@ -90,6 +91,7 @@ pub fn run() {
         &map,
         false,
         &no_modal,
+        &no_props,
     );
     snap(&canvas, None, "1_menu.bmp");
 
@@ -162,6 +164,7 @@ pub fn run() {
         &map,
         false,
         &supply_modal,
+        &no_props,
     );
     snap(&canvas, Some(&world_a), "2_supply.bmp");
 
@@ -185,6 +188,7 @@ pub fn run() {
         &map,
         false,
         &pick_modal,
+        &no_props,
     );
     snap(&canvas, Some(&world_a), "3_vesselpick.bmp");
 
@@ -264,6 +268,7 @@ pub fn run() {
         &map,
         false,
         &no_modal,
+        &no_props,
     );
     snap(&canvas, Some(&world_b), "4_playing.bmp");
 
@@ -294,6 +299,7 @@ pub fn run() {
         &map,
         false,
         &no_modal,
+        &no_props,
     );
     snap(&canvas, None, "5_dayend.bmp");
 
@@ -317,6 +323,7 @@ pub fn run() {
         &map,
         false,
         &no_modal,
+        &no_props,
     );
     snap(&canvas, None, "6_final.bmp");
 
@@ -393,6 +400,7 @@ pub fn run() {
         &map,
         false,
         &no_modal,
+        &no_props,
     );
     snap(&canvas, Some(&world_tut), "8_tutorial.bmp");
 
@@ -531,6 +539,7 @@ pub fn run() {
         &map,
         false,
         &no_modal,
+        &no_props,
     );
     snap(&canvas, Some(&world_c), "13_qte.bmp");
 
@@ -573,6 +582,7 @@ pub fn run() {
         &map,
         false,
         &sponge_modal,
+        &no_props,
     );
     snap(&canvas, Some(&world_c), "14_sponge.bmp");
 
@@ -618,6 +628,7 @@ pub fn run() {
         &map,
         false,
         &no_modal,
+        &no_props,
     );
     snap(&canvas, Some(&world_c), "15_coolqte.bmp");
 
@@ -649,6 +660,7 @@ pub fn run() {
         &map,
         false,
         &no_modal,
+        &no_props,
     );
     snap(&canvas, Some(&world_b), "16_pause.bmp");
 
@@ -692,6 +704,7 @@ pub fn run() {
         &map,
         false,
         &no_modal,
+        &no_props,
     );
     snap(&canvas, Some(&world_c), "17_noposuda.bmp");
 
@@ -716,18 +729,54 @@ pub fn run() {
         &map,
         false,
         &pick_modal,
+        &no_props,
     );
     snap(&canvas, Some(&world_c), "18_spongepick.bmp");
 
-    // --- 19. Мусорка (ТЗ №5): новый тайл у стены рядом с мойкой ---
+    // --- 19. Мусорка (ТЗ №5): урна — билборд-спрайт на полу (не тайл-стена),
+    //         игрок подошёл: виден спрайт и подсказка «E МУСОРКА...» ---
     let trash_cam = GameCam {
-        x: 5.2,
-        y: 4.2,
-        angle: std::f32::consts::PI, // взгляд на запад: мусорка (2,4), мойка, бочка
+        x: 3.5,
+        y: 4.3,
+        angle: std::f32::consts::PI, // взгляд на запад: урна (2.3,4.3) в 1.2 м — уже в радиусе E
     };
+    let trash_props = [crate::sprites::WorldProp {
+        kind: crate::sprites::PropKind::TrashBin,
+        pos: Vec2::new(2.3, 4.3),
+    }];
     renderer.render(&map, &textures, &trash_cam, 1.0);
+    renderer.draw_props(&sprites, &trash_props, &trash_cam, 1.0);
     renderer.present();
-    write_bmp_world(&out.join("19_trash.bmp"), &renderer.rgba);
+    let world_trash = renderer.rgba.clone();
+    let trash_state = GameState {
+        phase: Phase::Playing,
+        day: 2,
+        money: 45,
+        norm: norm_for(2),
+        day_earned: 40,
+        time_left: 300.0,
+        msg: "МУСОРКА РЯДОМ — ВЫБРОСИТЬ НЕНУЖНОЕ (E)".into(),
+        msg_t: 3.0,
+        ..Default::default()
+    };
+    canvas.clear();
+    ui::draw_frame(
+        &mut canvas,
+        &font,
+        &trash_state,
+        &inv,
+        &barrels,
+        &no_qte,
+        &no_cool,
+        &no_cust,
+        5.0,
+        &trash_cam,
+        &map,
+        false,
+        &no_modal,
+        &trash_props,
+    );
+    snap(&canvas, Some(&world_trash), "19_trash.bmp");
 
     // --- 20. «Квас кончился» (ТЗ №1): бочка сразу помечена на мойку ---
     let mut ran_barrels = Barrels::from_map(&map);
@@ -765,6 +814,7 @@ pub fn run() {
         &map,
         false,
         &no_modal,
+        &no_props,
     );
     snap(&canvas, Some(&world_ran), "20_ranout.bmp");
 
@@ -803,6 +853,7 @@ pub fn run() {
         &map,
         false,
         &no_modal,
+        &no_props,
     );
     snap(&canvas, Some(&world_hint), "21_hint.bmp");
 
