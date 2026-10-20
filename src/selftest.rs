@@ -50,9 +50,9 @@ pub fn run() {
     let mut renderer = Renderer::new();
     let mut canvas = Canvas::new();
     let cam = GameCam {
-        x: 5.5,
-        y: 4.8,
-        angle: -std::f32::consts::FRAC_PI_2 - 0.4,
+        x: 7.0,
+        y: 4.7,
+        angle: -0.45, // взгляд на кассу (9,3) и очередь у правой стены
     };
     let no_qte = BrewQte::default();
     let no_wash = WashQte::default();
@@ -192,21 +192,10 @@ pub fn run() {
     let mut barrels = Barrels::from_map(&map);
     let mut keys: Vec<(i32, i32)> = barrels.map.keys().copied().collect();
     keys.sort();
+    // одна бочка (ТЗ redesign): в кадре — готовая с иконкой заказа (ТЗ №5)
     if let Some(b) = barrels.map.get_mut(&keys[0]) {
-        b.phase = BarrelPhase::Empty;
-        b.step = 0;
-    }
-    if let Some(b) = barrels.map.get_mut(&keys[1]) {
-        b.phase = BarrelPhase::Ferment(42.0);
-        b.step = 2;
-    }
-    if let (Some(b0), Some(b1)) = (keys.get(0), keys.get(1)) {
-        if b0 != b1 {
-            if let Some(b) = barrels.map.get_mut(b1) {
-                b.phase = BarrelPhase::Ready(104.0);
-                b.portions = 13;
-            }
-        }
+        b.phase = BarrelPhase::Ready(104.0);
+        b.portions = 13;
     }
     let inv = Inventory {
         hands: [
@@ -236,14 +225,14 @@ pub fn run() {
     };
     let custs = vec![
         cv(
-            5.5,
+            9.5,
             2.7,
             Some("Дай, внучек, стаканчик квасика, холодненький..."),
             Vessel::Glass,
             true,
         ),
         cv(
-            5.5,
+            9.5,
             1.7,
             Some("Стакан, но погуще, а то опять водица."),
             Vessel::Glass,
@@ -252,8 +241,8 @@ pub fn run() {
     ];
     renderer.render(&map, &textures, &cam, 1.0);
     let sprite_list: Vec<(Vec2, NpcKind)> = vec![
-        (Vec2::new(5.5, 2.7), NpcKind::Grandma),
-        (Vec2::new(5.5, 1.7), NpcKind::Worker),
+        (Vec2::new(9.5, 2.7), NpcKind::Grandma),
+        (Vec2::new(9.5, 1.7), NpcKind::Worker),
     ];
     renderer.draw_sprites(&sprites, &sprite_list, &cam, 1.0);
     renderer.present();
@@ -383,7 +372,7 @@ pub fn run() {
         dir: 1.0,
         zone0: 0.40,
         zone1: 0.53,
-        barrel: Some(keys[1]),
+        barrel: Some(keys[0]),
         lock: 0.0,
         flash: 0.0,
     };
@@ -465,19 +454,19 @@ pub fn run() {
 
     // --- 11. Камера на отступе от прилавка (ТЗ №7) ---
     let close_cam = GameCam {
-        x: 5.5,
-        y: 4.6,
+        x: 9.5,
+        y: 4.7,
         angle: -std::f32::consts::FRAC_PI_2,
     };
     renderer.render(&map, &textures, &close_cam, 1.0);
-    renderer.draw_sprites(&sprites, &[(Vec2::new(5.5, 2.7), NpcKind::Grandma)], &close_cam, 1.0);
+    renderer.draw_sprites(&sprites, &[(Vec2::new(9.5, 2.7), NpcKind::Grandma)], &close_cam, 1.0);
     renderer.present();
     write_bmp_world(&out.join("11_close.bmp"), &renderer.rgba);
 
     // --- 12. Камера вплотную к обычной стене ---
     let wall_cam = GameCam {
-        x: 1.3,
-        y: 4.0,
+        x: 10.6,
+        y: 3.5,
         angle: 0.0,
     };
     renderer.render(&map, &textures, &wall_cam, 1.0);
@@ -491,7 +480,7 @@ pub fn run() {
         dir: 1.0,
         zone0: 0.42,
         zone1: 0.54,
-        barrel: Some(keys[1]),
+        barrel: Some(keys[0]),
         lock: 0.0,
         flash: 0.0,
     };
@@ -589,7 +578,7 @@ pub fn run() {
 
     // --- 15. Охлаждение перебродившей бочки (ТЗ №9): синяя зона ---
     let mut cool_barrels = Barrels::from_map(&map);
-    if let Some(b) = cool_barrels.map.get_mut(&keys[1]) {
+    if let Some(b) = cool_barrels.map.get_mut(&keys[0]) {
         b.phase = BarrelPhase::Overripe(130.0);
         b.portions = 20;
     }
@@ -599,7 +588,7 @@ pub fn run() {
         dir: 1.0,
         zone0: 0.38,
         zone1: 0.52,
-        barrel: Some(keys[1]),
+        barrel: Some(keys[0]),
         lock: 0.0,
         flash: 0.0,
     };

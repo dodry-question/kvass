@@ -276,6 +276,22 @@ impl Renderer {
                     }
                 }
             }
+            // Деревянная крышка прилавка (ТЗ №6): при подходе вплотную
+            // закрашиваем верхнюю грань текстурой досок — никакой пустоты.
+            if hit_tile == Tile::Counter && perp < 1.6 && start > 0 {
+                let cap = ((SCREEN_H as f32 / perp.max(0.2)) as i32 / 16)
+                    .clamp(2, 24)
+                    .min(start);
+                for y in (start - cap)..start {
+                    let c = tex.texel(TexId::Counter, tex_x, 6);
+                    let mut bright = (1.0 - perp / MAX_DIST).max(0.3) * flicker * dark;
+                    if y & 1 == 1 {
+                        bright *= 0.75;
+                    }
+                    let band = light_band(bright, BAYER4[(x & 3) as usize][(y & 3) as usize]);
+                    idx[y as usize * SCREEN_W + x] = self.colormap[c as usize][band];
+                }
+            }
         }
 
         self.indices = idx;

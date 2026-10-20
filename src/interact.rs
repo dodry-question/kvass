@@ -10,6 +10,7 @@ use crate::inventory::{HandItem, Inventory};
 use crate::map::Tile;
 use crate::modals::{Modal, Modals};
 use crate::raycaster::GameCam;
+use crate::sprites::{NpcKind, Vessel};
 
 /// Прогресс розлива/промывки бочки.
 #[derive(Resource, Default)]
@@ -89,7 +90,7 @@ fn front_tile(cam: &GameCam) -> (i32, i32) {
 }
 
 pub fn interact(
-    keys: Res<ButtonInput<KeyCode>>,
+    mut keys: ResMut<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
     cam: Res<GameCam>,
     map: Res<crate::map::Map>,
@@ -142,11 +143,13 @@ pub fn interact(
         Tile::Shelf => {
             // ТЗ №4: паузим мир и открываем модалку выбора посуды.
             modal.modal = Modal::VesselPick;
+            keys.clear(); // ТЗ №1: та же E не закроет модалку в этот же кадр
             state.notify("СТЕЛЛАЖ ПОСУДЫ: [1] СТАКАН [2] БАНКА [3] БУТЫЛКА".into());
         }
         Tile::Supply => {
             // ТЗ №3: окно снабжения — закупка с доставкой через 3–5 сек.
             modal.modal = Modal::Supply;
+            keys.clear(); // ТЗ №1
             state.notify("ОКНО СНАБЖЕНИЯ: [1] СУХАРИ [2] САХАР [3] БАНКИ [4] БУТЫЛКИ".into());
         }
         Tile::Sink => {
@@ -269,7 +272,9 @@ pub fn interact(
                     continue;
                 }
                 let d = c.pos.distance(target);
-                if d < 1.7 && best.map(|(_, bd)| d < bd).unwrap_or(true) {
+                // ТЗ №4: широкий триггер выдачи — клиент перед прилавком,
+                // игрок за ним (геометрия даёт ~1.8–2.0, берём с запасом).
+                if d < 2.4 && best.map(|(_, bd)| d < bd).unwrap_or(true) {
                     best = Some((e, d));
                 }
             }
@@ -278,6 +283,19 @@ pub fn interact(
                 return;
             };
             let Ok((_, mut c)) = customers.get_mut(entity) else { return };
+            // ТЗ №7 (бандиты): у кассы бандит требует дань — E платит 30 К.
+            if c.kind == NpcKind::Hooligan {
+                if state.money >= 30 {
+                    state.money -= 30;
+                    c.served = true;
+                    crate::audio::play_sfx(&mut commands, &bank, "coin", 0.8);
+                    state.notify("ДАНЬ ЗАПЛАЧЕНА: -30 К.".into());
+                } else {
+                    state.notify("НЕТ 30 К. НА ДАНЬ!".into());
+                    state.face_set(2, 1.0);
+                }
+                return;
+            }
             let order = c.order;
             let kind = c.kind;
             match inv.take_full(order) {
@@ -289,6 +307,10 @@ pub fn interact(
                     // чаевые: если ждал недолго
                     if c.patience > c.max_patience * 0.5 && !overripe {
                         pay += 1;
+                    }
+                    // ТЗ №5: грязный стакан после гостя уходит в пул мойки.
+                    if order == Vessel::Glass {
+                        inv.dirty_glasses += 1;
                     }
                     state.money += pay;
                     state.day_earned += pay;
@@ -324,11 +346,13 @@ pub fn fill_hold(
     mut fill: ResMut<FillState>,
     mut commands: Commands,
     bank: Res<crate::audio::SoundBank>,
+    mut wash_snd: Local<f32>,
 ) {
     let holding = keys.pressed(KeyCode::KeyE) || mouse.pressed(MouseButton::Left);
     if !matches!(state.phase, Phase::Playing | Phase::Tutorial) {
         return;
     }
+    state.wash_bar = 0.0; // ТЗ №8: полоска промывки (заполнится, если моем)
     let (tx, ty) = front_tile(&cam);
     if map.get(tx, ty) != Tile::Barrel {
         fill.progress = 0.0;
@@ -345,11 +369,19 @@ pub fn fill_hold(
                 crate::audio::play_sfx(&mut commands, &bank, "water", 0.6);
             }
             fill.progress += time.delta_secs() / 1.5;
+            // ТЗ №8: полоска прогресса + звук воды при промывке.
+            state.wash_bar = fill.progress.clamp(0.0, 1.0);
+            *wash_snd += time.delta_secs();
+            if *wash_snd > 0.55 {
+                *wash_snd = 0.0;
+                crate::audio::play_sfx(&mut commands, &bank, "water", 0.45);
+            }
             if fill.progress >= 1.0 {
                 b.phase = BarrelPhase::Empty;
                 b.step = 0;
                 b.portions = 0;
                 fill.progress = 0.0;
+                state.wash_bar = 0.0;
                 state.notify("БОЧКА ВЫМЫТА. СВАРИТЕ НОВЫЙ КВАС".into());
             }
         } else {

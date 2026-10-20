@@ -591,6 +591,26 @@ fn draw_hud(
         font.draw_fit(c, 16, MSG_Y + 6, CV_W - 32, &state.msg, SZ_M, col::LAMP, 255);
     }
 
+    // --- Полоска промывки бочки (удержание E, ТЗ №8) ---
+    if state.wash_bar > 0.0 {
+        let bw = 320;
+        let bx = (CV_W - bw) / 2;
+        let by = MSG_Y - 62;
+        panel(c, bx - 6, by - 6, bw + 12, 44);
+        font.draw(c, bx + 2, by - 2, "МОЙКА БОЧКИ (ДЕРЖИТЕ E)", SZ_S, col::LAMP, 255);
+        let sy = by + 18;
+        c.rect(bx, sy, bw, 12, col::METAL_D, 255);
+        c.frame(bx, sy, bw, 12, col::BLACK, 255);
+        c.rect(
+            bx + 2,
+            sy + 2,
+            ((bw - 4) as f32 * state.wash_bar.clamp(0.0, 1.0)) as i32,
+            8,
+            col::KVASS_L,
+            255,
+        );
+    }
+
     // --- Подсказка: на какой предмет смотришь ---
     let label: Option<(&str, &str)> = if state.phase == Phase::Tutorial {
         None
@@ -612,7 +632,6 @@ fn draw_hud(
                 }
             }
             Tile::Counter => Some(("E", "ПРИЛАВОК - ОТДАТЬ КВАС ПОКУПАТЕЛЮ")),
-            Tile::Doorway => Some(("E", "ДВЕРЬ НА УЛИЦУ")),
             _ => None,
         }
     };

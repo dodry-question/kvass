@@ -56,6 +56,8 @@ pub struct GameState {
     pub face_mood: u8,
     /// Секунд, сколько держится текущее выражение лица.
     pub face_t: f32,
+    /// Прогресс промывки бочки удержанием E (0..1) — полоска в HUD (ТЗ №8).
+    pub wash_bar: f32,
 }
 
 impl Default for GameState {
@@ -80,6 +82,7 @@ impl Default for GameState {
             pause_sel: 0,
             face_mood: 0,
             face_t: 0.0,
+            wash_bar: 0.0,
         }
     }
 }
@@ -173,7 +176,7 @@ pub const PAUSE_FROM_TUTORIAL: u8 = 1;
 /// Число пунктов в меню паузы.
 pub const PAUSE_ITEMS: u8 = 3;
 pub fn phase_system(
-    keys: Res<ButtonInput<KeyCode>>,
+    mut keys: ResMut<ButtonInput<KeyCode>>,
     mut state: ResMut<GameState>,
     mut inv: ResMut<crate::inventory::Inventory>,
     mut commands: Commands,
@@ -195,6 +198,7 @@ pub fn phase_system(
                     state.tut_step = 0;
                     state.notify("ОБУЧЕНИЕ. W A S D - ХОД, МЫШЬ - ОБЗОР".into());
                 }
+                keys.clear(); // ТЗ №1: клавиша не протекает в другие системы кадра
             }
         }
         Phase::DayEnd => {
@@ -215,11 +219,13 @@ pub fn phase_system(
                 state.spawn_interval = (22.0 - state.day as f32 * 2.5).max(11.0);
                 clear_customers(&mut commands, &customers);
                 start_day(&mut state, &mut barrels, &mut dirty);
+                keys.clear(); // ТЗ №1
             }
         }
         Phase::Final => {
             if keys.just_pressed(KeyCode::Escape) {
                 state.phase = Phase::Menu;
+                keys.clear(); // ТЗ №1
             }
         }
         Phase::Playing => {
@@ -227,6 +233,7 @@ pub fn phase_system(
                 state.pause_prev = PAUSE_FROM_PLAYING;
                 state.pause_sel = 0;
                 state.phase = Phase::Paused;
+                keys.clear(); // ТЗ №1
             }
         }
         Phase::Tutorial => {
@@ -234,6 +241,7 @@ pub fn phase_system(
                 state.pause_prev = PAUSE_FROM_TUTORIAL;
                 state.pause_sel = 0;
                 state.phase = Phase::Paused;
+                keys.clear(); // ТЗ №1
             }
         }
         Phase::Paused => {
@@ -251,9 +259,13 @@ pub fn phase_system(
             if keys.just_pressed(KeyCode::Escape) {
                 // ESC = продолжить
                 ok_pause_resume(&mut state);
+                keys.clear(); // ТЗ №1: E/ESC не сработают в игре в этот же кадр
             } else if ok {
                 match state.pause_sel.min(n - 1) {
-                    0 => ok_pause_resume(&mut state),
+                    0 => {
+                        ok_pause_resume(&mut state);
+                        keys.clear(); // ТЗ №1
+                    }
                     1 => {
                         // в главное меню: сброс мира
                         for b in barrels.map.values_mut() {
@@ -265,6 +277,7 @@ pub fn phase_system(
                         dirty.0 = 0;
                         state.msg_t = 0.0;
                         state.phase = Phase::Menu;
+                        keys.clear(); // ТЗ №1
                     }
                     _ => {
                         // выход из игры

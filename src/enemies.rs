@@ -145,7 +145,8 @@ pub fn hooligan_spawn(
     ));
 }
 
-/// Поведение хулиганов: угрозы -> уход за бочку -> слом -> убегает.
+/// Поведение бандитов (ТЗ №7): требование дани -> E у кассы платит 30 К ->
+/// или через 15 сек портят бочку и уходят.
 pub fn hooligan_behavior(
     time: Res<Time>,
     mut q: Query<(Entity, &mut Customer, &mut Hooligan)>,
@@ -176,17 +177,18 @@ pub fn hooligan_behavior(
             continue;
         }
         h.t += dt;
-        if (h.t - 3.0).abs() < dt {
+        // ТЗ №7: бандит требует дань; игрок платит E у кассы (30 К).
+        if (h.t - 0.5).abs() < dt || (h.t - 5.0).abs() < dt {
+            c.say("ПЛАТИ ДАНЬ 30 К. ИЛИ ИСПОРТИМ КВАС!".into());
+        }
+        if (h.t - 10.0).abs() < dt {
             c.say(dialogues::hooligan_threat(rng).to_string());
         }
-        if (h.t - 7.0).abs() < dt {
-            c.say(dialogues::hooligan_threat(rng).to_string());
-        }
-        if h.t > 10.0 {
-            // идёт за бочку (западный проход вдоль прилавка)
+        if h.t > 15.0 {
+            // идёт за бочку (северный коридор, затем западный проход)
             h.going = true;
             c.state = CustState::Custom;
-            c.path = VecDeque::from([Vec2::new(2.5, 2.4), Vec2::new(2.5, 4.5)]);
+            c.path = VecDeque::from([Vec2::new(2.5, 2.5), Vec2::new(2.5, 5.5)]);
             c.say("Всё, барин, сам виноват!".into());
         }
         let _ = &mut commands;
@@ -227,7 +229,7 @@ pub fn hooligan_behavior(
             c.say("ВОТ ТЕБЕ И КВАС!".into());
             c.path = VecDeque::from([
                 Vec2::new(2.5, 1.5),
-                Vec2::new(4.5, 1.5),
+                Vec2::new(6.5, 1.5),
                 crate::customer::DOOR,
             ]);
         }

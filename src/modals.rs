@@ -107,7 +107,7 @@ const SUPPLY_KINDS: [SupplyKind; 4] = [
 
 /// Ввод в открытом модалке: покупка (Supply) или выбор посуды (VesselPick).
 pub fn modal_input(
-    keys: Res<ButtonInput<KeyCode>>,
+    mut keys: ResMut<ButtonInput<KeyCode>>,
     mut modals: ResMut<Modals>,
     mut state: ResMut<GameState>,
     mut inv: ResMut<Inventory>,
@@ -155,6 +155,7 @@ pub fn modal_input(
             if keys.just_pressed(KeyCode::Escape) || keys.just_pressed(KeyCode::KeyE) {
                 state.notify("ОКНО СНАБЖЕНИЯ ЗАКРЫТО".into());
                 modals.modal = Modal::None;
+                keys.clear(); // ТЗ №1: закрытие не открывает паузу в этот же кадр
             }
         }
         Modal::VesselPick => {
@@ -172,8 +173,10 @@ pub fn modal_input(
                     state.notify("РУКИ ЗАНЯТЫ — ПОЛОЖИТЕ ЧТО-НИБУДЬ".into());
                 }
                 modals.modal = Modal::None;
+                keys.clear(); // ТЗ №1
             } else if keys.just_pressed(KeyCode::Escape) || keys.just_pressed(KeyCode::KeyE) {
                 modals.modal = Modal::None;
+                keys.clear(); // ТЗ №1
             }
         }
         Modal::None => {}

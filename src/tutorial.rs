@@ -24,7 +24,7 @@ pub const TUT_STEPS: [TutStep; 8] = [
     },
     TutStep {
         text: "ШАГ 2/8. НАБЕРИТЕ ВОДУ У КОЛОНКИ (E)",
-        target: (6.5, 6.5),
+        target: (9.5, 6.5),
     },
     TutStep {
         text: "ШАГ 3/8. ВОЗЬМИТЕ САХАР С ИЗЮМОМ (E)",
@@ -32,24 +32,24 @@ pub const TUT_STEPS: [TutStep; 8] = [
     },
     TutStep {
         text: "ШАГ 4/8. К БОЧКЕ: E ТРИЖДЫ (СУХАРИ-ВОДА-САХАР)",
-        target: (1.5, 4.5),
+        target: (1.5, 5.5),
     },
     // ТЗ №2: отдельный шаг на мини-игру ускорения брожения.
     TutStep {
         text: "ШАГ 5/8. НАЖИМАЙТЕ ПРОБЕЛ В ЗОНУ БЕГУНКА",
-        target: (1.5, 4.5),
+        target: (1.5, 5.5),
     },
     TutStep {
         text: "ШАГ 6/8. ВОЗЬМИТЕ СТАКАН СО СТЕЛЛАЖА (E)",
-        target: (8.5, 6.5),
+        target: (6.5, 6.5),
     },
     TutStep {
         text: "ШАГ 7/8. КВАС ГОТОВ: ДЕРЖИТЕ E У БОЧКИ",
-        target: (1.5, 4.5),
+        target: (1.5, 5.5),
     },
     TutStep {
         text: "ШАГ 8/8. ОТДАЙТЕ КВАС БАБУШКЕ (E)",
-        target: (5.5, 2.7), // на шаге 8 цель — сама бабушка у прилавка
+        target: (9.5, 2.7), // на шаге 8 цель — сама бабушка у прилавка
     },
 ];
 
@@ -85,9 +85,19 @@ pub fn tutorial_system(
         return;
     }
 
-    // в обучении квас бродит быстро (осталось 8 сек), чтобы не ждать минуту
+    // в обучении квас бродит быстро (осталось 8 сек), чтобы не ждать минуту.
+    // ТЗ (зависание обучения): на шаге QTE рост капнут на 80% — дальше только
+    // удары по ПРОБЕЛУ (+10%), иначе бочка уходит в Ready и шаг зависает.
     for b in barrels.map.values_mut() {
-        if let BarrelPhase::Ferment(p) = &mut b.phase {
+        if state.tut_step == 4 {
+            match &mut b.phase {
+                BarrelPhase::Ferment(p) => *p = (*p).min(80.0),
+                BarrelPhase::Ready(_) | BarrelPhase::Overripe(_) => {
+                    b.phase = BarrelPhase::Ferment(80.0)
+                }
+                _ => {}
+            }
+        } else if let BarrelPhase::Ferment(p) = &mut b.phase {
             let fast = (1.0 - 8.0 / b.brew_time.max(1.0)) * 100.0;
             if *p < fast {
                 *p = fast;
