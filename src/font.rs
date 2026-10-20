@@ -187,13 +187,15 @@ pub const GLYPHS: &[(char, [&str; 6])] = &[
 ];
 
 /// Кегли можно переопределить переменной окружения (для отладки).
+/// Пол 20px: пиксельный пайплайн (растризация вполовину + порог + ×2)
+/// ниже 20px даёт нечитаемую кашу — буквы слипаются.
 fn fontsize_env() -> Option<Vec<usize>> {
     std::env::var("KVASS_FONT_SIZES")
         .ok()
         .map(|s| {
             s.split(',')
                 .filter_map(|p| p.trim().parse::<usize>().ok())
-                .filter(|&p| (8..=200).contains(&p))
+                .filter(|&p| (20..=200).contains(&p))
                 .collect::<Vec<usize>>()
         })
         .filter(|v: &Vec<usize>| !v.is_empty())
@@ -375,9 +377,17 @@ impl Font {
         }
     }
 
+    /// Отладка для ватермарки: откуда шрифт (TTF или фолбэк 5×6).
+    pub fn source_label(&self) -> &'static str {
+        if self.ttf {
+            "GOLOS-TTF"
+        } else {
+            "FALLBACK-5x6!"
+        }
+    }
+
     fn metrics_of(&self, size: usize) -> SizeMetrics {
-        let s = pick_nearest(size);
-        *self
+        let s = pick_nearest(size);        *self
             .metrics
             .get(&s)
             .unwrap_or(&(s as i32, 0, s as i32 + 6, 0))

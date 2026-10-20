@@ -580,11 +580,17 @@ fn draw_hud(
         font.draw(c, x, BAR_Y + 16, hint, SZ_S, col::TILE_D, 230);
     }
 
-    // Ватермарка билда (ТЗ): если её нет — запущен старый exe
+    // Ватермарка билда (ТЗ): если её нет — запущен старый exe.
+    // FONT: показывает, какой шрифт реально в игре (GOLOS / FALLBACK-5x6).
     {
-        let bid = crate::BUILD_ID;
-        let x = (CV_W - font.w(bid, SZ_S)) / 2;
-        font.draw(c, x, 6, bid, SZ_S, col::TILE_D, 150);
+        let bid = format!(
+            "{} FONT:{} {}",
+            crate::BUILD_ID,
+            font.source_label(),
+            font.px_label
+        );
+        let x = (CV_W - font.w(&bid, SZ_S)) / 2;
+        font.draw(c, x, 6, &bid, SZ_S, col::TILE_D, 150);
     }
 
     // --- Строка уведомления ---
