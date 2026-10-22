@@ -120,7 +120,6 @@ pub const ADV_SKIP: (i32, i32, i32, i32) = (656, 528, 308, 64);
 
 // =================== Обои ===================
 
-/// Обои меню (RGBA 8 бит), читаются один раз из assets/menu_bg.png.
 pub struct MenuBg {
     pub w: usize,
     pub h: usize,
@@ -129,11 +128,14 @@ pub struct MenuBg {
 
 static BG: OnceLock<Option<MenuBg>> = OnceLock::new();
 
-/// Обои (загружаются лениво; None — файла нет, рисуется плашка-запаска).
+/// Обои меню (RGBA 8 бит). PNG встроен прямо в exe (как шрифт):
+/// главное меню с картинкой работает из любого каталога запуска,
+/// независимо от того, что лежит рядом с exe.
 pub fn bg() -> &'static Option<MenuBg> {
     BG.get_or_init(|| {
-        let path = crate::assets_root().join("menu_bg.png");
-        let img = image::open(&path).ok()?.into_rgba8();
+        let img = image::load_from_memory(include_bytes!("../assets/menu_bg.png"))
+            .ok()?
+            .into_rgba8();
         let (w, h) = img.dimensions();
         Some(MenuBg {
             w: w as usize,

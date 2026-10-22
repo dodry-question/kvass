@@ -966,13 +966,6 @@ fn draw_menu(c: &mut Canvas, font: &Font, state: &GameState, t: f32) {
         font.draw_fit_sh(c, tx + 12, 30, tw - 24, &state.msg, SZ_M, col::LAMP, 255);
     }
 
-    // подсказка ввода в нижней полоске обоев
-    if blink(t, 2.0) {
-        let hint = "МЫШЬ - КЛИК   СТРЕЛКИ - ВЫБОР   ENTER - ОК";
-        let w = font.w(hint, SZ_S);
-        font.draw(c, (CV_W - w) / 2, 772, hint, SZ_S, col::WHITE, 255);
-    }
-
     match state.menu_view {
         crate::day_cycle::MenuView::Main => {}
         crate::day_cycle::MenuView::Settings => draw_menu_settings(c, font, state),

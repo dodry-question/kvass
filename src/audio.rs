@@ -1,9 +1,11 @@
 //! Звук: процедурная генерация .wav (22 кГц, моно) + воспроизведение.
+//! Музыка главного меню — FLAC, встроенный в exe (см. `MENU_MUSIC`).
 //! Позже можно заменить файлы своими сэмплами — имена те же.
 
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use bevy::audio::AudioSink;
 use bevy::prelude::*;
@@ -13,6 +15,11 @@ use crate::day_cycle::{GameState, Phase};
 const SR: u32 = 22050;
 
 pub struct Sfx;
+
+/// Музыка главного меню (тема «Квасной лавки», FLAC).
+/// Встроена прямо в exe: игра работает из любого каталога запуска
+/// и не зависит от папки assets на диске.
+pub const MENU_MUSIC: &[u8] = include_bytes!("../assets/music/menu_theme.flac");
 
 pub const SOUNDS: &[&str] = &[
     "pour", "croutons", "water", "hiss", "ding", "hiss2", "fooff", "coin", "step1", "step2",
@@ -62,9 +69,11 @@ fn env(t: f32, dur: f32, attack: f32, release: f32) -> f32 {
     a.max(0.0) * r.max(0.0)
 }
 
-/// Генерирует все звуки в assets/sounds (если файлов нет).
+/// Генерирует все звуки в <assets_root>/sounds (если файлов нет).
+/// Пишем именно туда, откуда читает AssetServer: иначе при запуске
+/// `dist\kvass-shop.exe` из другой папки новые звуки не находились.
 pub fn generate_files() {
-    let dir = PathBuf::from("assets/sounds");
+    let dir = crate::assets_root().join("sounds");
     std::fs::create_dir_all(&dir).unwrap();
 
     // литьё кваса: шипение + бульканье
@@ -319,21 +328,33 @@ pub fn generate_files() {
 #[derive(Resource)]
 pub struct SoundBank {
     pub handles: HashMap<String, Handle<AudioSource>>,
+    /// Встроенная музыка меню (FLAC в exe).
+    pub music: Handle<AudioSource>,
     pub step_toggle: bool,
     pub step_t: f32,
     pub last_customers: usize,
     pub ambience_on: bool,
 }
 
-pub fn load_bank(mut commands: Commands, server: Res<AssetServer>) {
+pub fn load_bank(
+    mut commands: Commands,
+    server: Res<AssetServer>,
+    mut assets: ResMut<Assets<AudioSource>>,
+) {
     generate_files();
     let mut handles = HashMap::new();
     for name in SOUNDS {
         let h: Handle<AudioSource> = server.load(format!("sounds/{name}.wav"));
         handles.insert(name.to_string(), h);
     }
+    // Музыка меню — не через AssetServer (не нужен файл на диске):
+    // кладём байты FLAC прямо в ассеты (Bevy 0.20: AudioSource { bytes }).
+    let music = assets.add(AudioSource {
+        bytes: Arc::from(MENU_MUSIC),
+    });
     commands.insert_resource(SoundBank {
         handles,
+        music,
         step_toggle: false,
         step_t: 0.0,
         last_customers: 0,
@@ -398,6 +419,41 @@ pub fn ambience(
         }
     }
     *was_playing = playing;
+}
+
+/// Маркер музыки меню (одна петля).
+#[derive(Component)]
+pub struct MusicMark;
+
+/// Музыка главного меню: звучит на всех экранах меню (вход, настройки,
+/// рекомендация обучения) и гаснет, как только игрок уходит в игру.
+/// Громкость проходит через `GlobalVolume`, поэтому ползунок настроек
+/// действует и на музыку.
+pub fn menu_music(
+    mut commands: Commands,
+    bank: Res<SoundBank>,
+    state: Res<GameState>,
+    mut was_menu: Local<bool>,
+    players: Query<Entity, With<MusicMark>>,
+) {
+    let menu = state.phase == Phase::Menu;
+    if menu && !*was_menu {
+        commands.spawn((
+            AudioPlayer::new(bank.music.clone()),
+            PlaybackSettings {
+                mode: bevy::audio::PlaybackMode::Loop,
+                volume: bevy::audio::Volume::Linear(0.45),
+                ..default()
+            },
+            MusicMark,
+        ));
+    }
+    if !menu && *was_menu {
+        for e in &players {
+            commands.entity(e).despawn();
+        }
+    }
+    *was_menu = menu;
 }
 
 /// Громкость бурления — тише, когда игрок далеко от бочки.
