@@ -565,6 +565,17 @@ pub fn run() {
     renderer.present();
     write_bmp_world(&out.join("11_close.bmp"), &renderer.rgba);
 
+    // --- 11b. Вид через прилавок на вход (2 клетки): кромка крышки не должна
+    //         «ломаться» на стыке клеток двери (регрессия излома пространства) ---
+    let door_cam = GameCam {
+        x: 9.5,
+        y: 4.6,
+        angle: -std::f32::consts::FRAC_PI_2,
+    };
+    renderer.render(&map, &textures, &door_cam, 1.0);
+    renderer.present();
+    write_bmp_world(&out.join("11b_door_seam.bmp"), &renderer.rgba);
+
     // --- 12. Камера вплотную к обычной стене ---
     let wall_cam = GameCam {
         x: 10.6,

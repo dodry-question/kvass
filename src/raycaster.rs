@@ -140,6 +140,9 @@ impl Renderer {
             let mut steps = 0;
             // первая попавшаяся стена; если это прилавок — ещё и стена за ним
             let mut first: Option<(Tile, usize, f32)> = None;
+            // клетка первой низкой мебели: нужна для честной крышки (её дальняя
+            // кромка считается по ГРАНИЦАМ ЭТОЙ клетки, а не по стене за ней)
+            let mut first_cell: Option<(i32, i32)> = None;
             let mut second: Option<(Tile, usize, f32)> = None;
             // первая ПОЛНАЯ стена за низкой мебелью — реальный ограничитель
             // глубины спрайтов (см. zbuf ниже)
@@ -165,6 +168,7 @@ impl Renderer {
                     let low = is_low(t);
                     if first.is_none() {
                         first = Some((t, side, perp));
+                        first_cell = Some((map_x, map_y));
                         if !low {
                             break;
                         }
@@ -230,20 +234,25 @@ impl Renderer {
             // мебелью обрезаются. Если мебель достаёт до верха кадра
             // (start == 0), крышки нет и всё за ней скрыто целиком.
             let lid_band_top = if low {
-                // t выхода луча из тайла — ближайшая дальняя граница клетки
+                // t выхода луча из клетки НИЗКОЙ МЕБЕЛИ (прилавка/бочки):
+                // ближайшая её дальняя граница. Координаты берём именно этой
+                // клетки — иначе на стыке клеток стены за прилавком (например
+                // двух клеток двери) кромка крышки скачет, и стык выглядит
+                // «изломом пространства».
+                let (lmx, lmy) = first_cell.unwrap_or((map_x, map_y));
                 let fx = if rdx.abs() < 1e-6 {
                     f32::MAX
                 } else if rdx > 0.0 {
-                    (map_x as f32 + 1.0 - cam.x) / rdx
+                    (lmx as f32 + 1.0 - cam.x) / rdx
                 } else {
-                    (map_x as f32 - cam.x) / rdx
+                    (lmx as f32 - cam.x) / rdx
                 };
                 let fy = if rdy.abs() < 1e-6 {
                     f32::MAX
                 } else if rdy > 0.0 {
-                    (map_y as f32 + 1.0 - cam.y) / rdy
+                    (lmy as f32 + 1.0 - cam.y) / rdy
                 } else {
-                    (map_y as f32 - cam.y) / rdy
+                    (lmy as f32 - cam.y) / rdy
                 };
                 let perp_exit = fx.min(fy).max(perp + 0.05);
                 let full2 = SCREEN_H as f32 / perp_exit.max(0.2);
@@ -311,7 +320,11 @@ impl Renderer {
                     if (side2 == 0 && rdx > 0.0) || (side2 == 1 && rdy < 0.0) {
                         tx2 = TEX_SIZE - tx2 - 1;
                     }
-                    for y in start2..start {
+                    // Только реальная высота дальней стены: ниже её основания
+                    // (end2) должен быть пол из flat-кастера, а не растянутая
+                    // нижняя строка текстуры. Иначе за прилавком появлялась
+                    // «порванная» полоса, которая ломалась на стыках клеток.
+                    for y in start2..start.min(end2) {
                         let tex_y =
                             (((y - start2_raw) as f32 * TEX_SIZE as f32 / full2.max(1) as f32)
                                 as usize)
