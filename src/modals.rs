@@ -21,7 +21,7 @@ use bevy::prelude::*;
 use rand::prelude::*;
 
 use crate::day_cycle::{GameRng, GameState};
-use crate::inventory::{HandItem, Inventory};
+use crate::inventory::Inventory;
 use crate::sprites::Vessel;
 
 /// Открытое модальное окно (мир на паузе).
@@ -286,9 +286,15 @@ pub fn modal_input(
                 _ => None,
             };
             if let Some(v) = vessel {
-                if inv.put(HandItem::Empty(v, 1)) {
+                if inv.stock_of(v) == 0 {
+                    state.notify(format!("НА СКЛАДЕ НЕТ ЧИСТЫХ {}", v.name()));
+                } else if inv.take_empty_of(v) {
                     crate::audio::play_sfx(&mut commands, &bank, "pop", 0.5);
-                    state.notify(format!("ВЗЯТ ПУСТЫЙ {}", v.name()));
+                    state.notify(format!(
+                        "ВЗЯТ ПУСТОЙ {} (НА СКЛАДЕ ОСТАЛОСЬ {})",
+                        v.name(),
+                        inv.stock_of(v)
+                    ));
                 } else {
                     state.notify("РУКИ ЗАНЯТЫ — ПОЛОЖИТЕ ЧТО-НИБУДЬ".into());
                 }

@@ -317,7 +317,20 @@ pub fn interact(
                 match dumped {
                     Some(item) => {
                         crate::audio::play_sfx(&mut commands, &bank, "fooff", 0.7);
-                        state.notify(format!("ВЫБРОШЕНО: {}", item.name()));
+                        // Тара многоразовая: выброшенная посуда (пустая или
+                        // полная) возвращается на склад чистой. Иначе, выкинув
+                        // всю посуду, игрок остался бы без тары — софтлок.
+                        match item {
+                            HandItem::Empty(v, n) | HandItem::Full(v, n, _) => {
+                                inv.return_vessels(v, n);
+                                state.notify(format!(
+                                    "ВЫБРОШЕНО: {} — ТАРА ВЕРНУЛАСЬ НА СКЛАД (+{})",
+                                    v.name(),
+                                    n
+                                ));
+                            }
+                            other => state.notify(format!("ВЫБРОШЕНО: {}", other.name())),
+                        }
                     }
                     None => state.notify("РУКИ ПУСТЫ — ЧЕГО ВЫБРАСЫВАТЬ?".into()),
                 }

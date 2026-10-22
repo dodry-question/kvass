@@ -266,31 +266,41 @@ impl Inventory {
         None
     }
 
-    /// Взять пустую посуду со стеллажа (склад -> руки), циклом стакан/банка/бутылка.
-    pub fn take_empty_from_stock(&mut self, cycle: &mut usize) -> Option<Vessel> {
-        for _ in 0..3 {
-            let idx = *cycle % 3;
-            *cycle += 1;
-            let got = match idx {
-                0 if self.stock_glass > 0 => {
-                    self.stock_glass -= 1;
-                    Some(Vessel::Glass)
-                }
-                1 if self.stock_jar > 0 => {
-                    self.stock_jar -= 1;
-                    Some(Vessel::Jar)
-                }
-                2 if self.stock_bottle > 0 => {
-                    self.stock_bottle -= 1;
-                    Some(Vessel::Bottle)
-                }
-                _ => None,
-            };
-            if got.is_some() {
-                return got;
-            }
+    /// Сколько ЧИСТЫХ единиц посуды данного вида на складе.
+    pub fn stock_of(&self, v: Vessel) -> u8 {
+        match v {
+            Vessel::Glass => self.stock_glass,
+            Vessel::Jar => self.stock_jar,
+            Vessel::Bottle => self.stock_bottle,
         }
-        None
+    }
+
+    /// Взять одну чистую единицу конкретного вида со стеллажа.
+    /// Списываем со склада ТОЛЬКО если предмет реально уместился в руки:
+    /// иначе посуда либо дублировалась, либо пропадала.
+    pub fn take_empty_of(&mut self, v: Vessel) -> bool {
+        if self.stock_of(v) == 0 {
+            return false;
+        }
+        if !self.put(HandItem::Empty(v, 1)) {
+            return false;
+        }
+        match v {
+            Vessel::Glass => self.stock_glass -= 1,
+            Vessel::Jar => self.stock_jar -= 1,
+            Vessel::Bottle => self.stock_bottle -= 1,
+        }
+        true
+    }
+
+    /// Вернуть посуду на склад (например, выброшенную в мусорку).
+    /// Тара многоразовая: нельзя остаться совсем без посуды (софтлок).
+    pub fn return_vessels(&mut self, v: Vessel, n: u8) {
+        match v {
+            Vessel::Glass => self.stock_glass += n,
+            Vessel::Jar => self.stock_jar += n,
+            Vessel::Bottle => self.stock_bottle += n,
+        }
     }
 
     pub fn take_croutons_from_stock(&mut self) -> bool {
