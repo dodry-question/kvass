@@ -672,7 +672,19 @@ pub fn run() {
     renderer.present();
     write_bmp_world(&out.join("12_wallclose.bmp"), &renderer.rgba);
 
-    // --- 13. Полоска ускорения брожения (мини-игра на ПРОБЕЛЕ) ---
+    // --- 13. Ряд прилавков под острым углом: луч проходит несколько
+    //         клеток подряд, все они должны быть видны (регрессия
+    //         «невидимого куба» и исчезающих касс). ---
+    let counter_cam = GameCam {
+        x: 2.5,
+        y: 3.5,
+        angle: 0.245,
+    };
+    renderer.render(&map, &textures, &counter_cam, 1.0);
+    renderer.present();
+    write_bmp_world(&out.join("13_counter_row.bmp"), &renderer.rgba);
+
+    // --- 14. Полоска ускорения брожения (мини-игра на ПРОБЕЛЕ) ---
     let qte = BrewQte {
         active: true,
         pos: 0.48,
