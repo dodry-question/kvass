@@ -1001,33 +1001,33 @@ fn draw_menu(c: &mut Canvas, font: &Font, state: &GameState, t: f32) {
 const BG_PAN_A: i32 = 26;
 const BG_PAN_W: f32 = 0.785; // рад/с ≈ период 8 с
 
-/// Обои 1280×720 с горизонтальной панорамой: зум + сдвиг, полоски сверху/
-/// снизу в тон левым краям картинки. Нет файла — тёмная заливка-запаска.
+/// Обои с горизонтальной панорамой: масштаб «cover» на весь холст (без
+/// полос сверху/снизу) и сдвиг. Нет файла — тёмная заливка-запаска.
 fn draw_menu_bg(c: &mut Canvas, t: f32) {
     let Some(bg) = crate::menu::bg() else {
         c.rect(0, 0, CV_W, CV_H, col::INK, 255);
         return;
     };
-    // зум с зазором под сдвиг: ширина кадра + 2×амплитуда
-    let z = (CV_W as f32 + 2.0 * BG_PAN_A as f32) / bg.w as f32;
+    // Полное покрытие холста: обои 16:9, холст 16:10 — масштабируем по
+    // высоте, чтобы сверху и снизу не оставалось однотонных полос.
+    // Кадр получается шире холста: выравниваем вправо, а запас уходит
+    // влево (там пустое небо) и на горизонтальную панораму.
+    let z = (CV_H as f32 / bg.h as f32)
+        .max((CV_W as f32 + 2.0 * BG_PAN_A as f32) / bg.w as f32);
     let dw = (bg.w as f32 * z) as i32;
     let dh = (bg.h as f32 * z) as i32;
-    let y0 = ((CV_H - dh) / 2).max(0);
     let off = (BG_PAN_A as f32 * (t * BG_PAN_W).sin()).round() as i32;
-    let x0 = -BG_PAN_A + off;
-    // полоски в тон левому верхнему и левому нижнему пикселям картинки
-    let top = [bg.px[0], bg.px[1], bg.px[2]];
-    let bi = (bg.h - 1) * bg.w * 4;
-    let bot = [bg.px[bi], bg.px[bi + 1], bg.px[bi + 2]];
-    c.rect(0, 0, CV_W, y0, top, 255);
-    c.rect(0, y0 + dh, CV_W, CV_H - (y0 + dh), bot, 255);
+    let spare = (dw - CV_W - 2 * BG_PAN_A).max(0);
+    let x0 = -BG_PAN_A + off - spare;
+    let y0 = (CV_H - dh) / 2;
     // сама картинка (nearest) со сдвигом
     for dy in 0..dh {
         let cy = y0 + dy;
         if cy < 0 || cy >= CV_H {
             continue;
         }
-        let sy = ((dy as f32 / z) as usize).min(bg.h - 1);
+        // +1: пропускаем тёмную 1px кромку исходника по верхнему краю
+        let sy = (((dy as f32 / z) as usize) + 1).min(bg.h - 1);
         let si = sy * bg.w * 4;
         let di = (cy as usize * CV_W as usize) * 4;
         for cx in 0..CV_W {
