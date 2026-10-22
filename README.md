@@ -20,6 +20,10 @@ Soviet kvass shop — Doom-style рейкастер на Rust + Bevy. Vyatka Owl
 
 ![Прилавок](docs/screenshots/counter.png)
 
+Обучение встроено в первый день: шаги, цели и подсказки.
+
+![Обучение](docs/screenshots/tutorial.png)
+
 ---
 
 ## Сборка бинарника
