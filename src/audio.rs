@@ -25,6 +25,9 @@ pub const MENU_MUSIC: &[u8] = include_bytes!("../assets/music/menu_theme.flac");
 /// Тоже встроена в exe.
 pub const GAME_MUSIC: &[u8] = include_bytes!("../assets/music/game_theme.flac");
 
+/// Музыка экрана итогов дня (отчёт смены, FLAC, ~27 с, петля).
+pub const DAY_END_MUSIC: &[u8] = include_bytes!("../assets/music/day_end.flac");
+
 pub const SOUNDS: &[&str] = &[
     "pour", "croutons", "water", "hiss", "ding", "hiss2", "fooff", "coin", "step1", "step2",
     "door", "whistle", "pop", "bubble_loop", "street_loop", "alarm",
@@ -336,6 +339,8 @@ pub struct SoundBank {
     pub music: Handle<AudioSource>,
     /// Встроенная музыка игрового дня (FLAC в exe).
     pub game_music: Handle<AudioSource>,
+    /// Встроенная музыка итогов дня (FLAC в exe).
+    pub day_end_music: Handle<AudioSource>,
     pub step_toggle: bool,
     pub step_t: f32,
     pub last_customers: usize,
@@ -361,11 +366,15 @@ pub fn load_bank(
     let game_music = assets.add(AudioSource {
         bytes: Arc::from(GAME_MUSIC),
     });
+    let day_end_music = assets.add(AudioSource {
+        bytes: Arc::from(DAY_END_MUSIC),
+    });
     commands.insert_resource(MusicDuck(1.0));
     commands.insert_resource(SoundBank {
         handles,
         music,
         game_music,
+        day_end_music,
         step_toggle: false,
         step_t: 0.0,
         last_customers: 0,
@@ -428,13 +437,30 @@ pub fn ambience(
 pub enum Track {
     Menu,
     Game,
+    /// Отчёт в конце дня («итоги смены»).
+    DayEnd,
 }
 
-/// Маркер звучащей музыки: трек и базовая громкость.
+/// Длительность кроссфейда между треками (сек): переход слышен,
+/// но не тянется — смена настроения, а не резкий обрыв.
+const MUSIC_FADE: f32 = 0.8;
+
+fn wanted_track(phase: Phase) -> Option<Track> {
+    match phase {
+        Phase::Menu => Some(Track::Menu),
+        Phase::Tutorial | Phase::Playing | Phase::Paused => Some(Track::Game),
+        Phase::DayEnd => Some(Track::DayEnd),
+        Phase::Final => None,
+    }
+}
+
+/// Маркер звучащей музыки: трек, базовая громкость и коэффициент кроссфейда.
 #[derive(Component)]
 pub struct MusicMark {
     pub track: Track,
     pub base: f32,
+    /// 0 — тишина, 1 — полная громкость (плавно меняется при смене трека).
+    pub gain: f32,
 }
 
 impl MusicMark {
@@ -444,41 +470,42 @@ impl MusicMark {
         let base = match track {
             Track::Menu => 0.40,
             Track::Game => 0.22,
+            Track::DayEnd => 0.30,
         };
-        Self { track, base }
+        Self {
+            track,
+            base,
+            gain: 0.0,
+        }
     }
 }
 
-/// Музыка: тема меню на экранах входа, тема игры — в дни/обучении/итогах.
-/// Оба трека зациклены (PlaybackMode::Loop) и меняются сами при смене фазы.
+/// Музыка: тема меню, тема игры и тема итогов дня. Все треки зациклены,
+/// смена фазы запускает новый трек с кроссфейдом (старый плавно уходит).
 pub fn music(
     mut commands: Commands,
     bank: Res<SoundBank>,
     state: Res<GameState>,
     players: Query<(Entity, &MusicMark)>,
 ) {
-    let wanted = match state.phase {
-        Phase::Menu => Some(Track::Menu),
-        Phase::Tutorial | Phase::Playing | Phase::DayEnd | Phase::Paused => Some(Track::Game),
-        Phase::Final => None,
+    let Some(track) = wanted_track(state.phase) else {
+        return;
     };
-    let current = players.iter().next().map(|(_, m)| m.track);
-    if current == wanted {
+    // нужный трек уже звучит (в т.ч. если он ещё плавно проявляется)
+    if players.iter().any(|(_, m)| m.track == track) {
         return;
     }
-    for (e, _) in &players {
-        commands.entity(e).despawn();
-    }
-    let Some(track) = wanted else { return };
     let h = match track {
         Track::Menu => bank.music.clone(),
         Track::Game => bank.game_music.clone(),
+        Track::DayEnd => bank.day_end_music.clone(),
     };
     commands.spawn((
         AudioPlayer::new(h),
         PlaybackSettings {
             mode: bevy::audio::PlaybackMode::Loop,
-            volume: bevy::audio::Volume::Linear(MusicMark::new(track).base),
+            // стартуем с нуля: громкость даст кроссфейд
+            volume: bevy::audio::Volume::Linear(0.0),
             ..default()
         },
         MusicMark::new(track),
@@ -489,21 +516,35 @@ pub fn music(
 #[derive(Resource)]
 pub struct MusicDuck(pub f32);
 
-/// Мягко приглушает музыку, пока звучат эффекты, чтобы они не тонули,
-/// и применяет мастер-громкость из настроек к уже играющему треку.
+/// Кроссфейд треков, приглушение под эффекты и мастер-громкость настроек.
 pub fn music_volume(
     time: Res<Time>,
     gvol: Res<GlobalVolume>,
+    state: Res<GameState>,
+    mut commands: Commands,
     mut duck: ResMut<MusicDuck>,
-    mut music: Query<(&MusicMark, &mut AudioSink)>,
+    mut music: Query<(Entity, &mut MusicMark, &mut AudioSink)>,
     sfx: Query<&AudioSink, (Without<MusicMark>, Without<LoopMark>)>,
 ) {
+    let dt = time.delta_secs();
+    let wanted = wanted_track(state.phase);
     let busy = sfx.iter().any(|s| !s.empty());
     let target = if busy { 0.55 } else { 1.0 };
-    duck.0 += (target - duck.0) * (time.delta_secs() * 6.0).min(1.0);
+    duck.0 += (target - duck.0) * (dt * 6.0).min(1.0);
     let g = gvol.volume.to_linear();
-    for (mark, mut sink) in &mut music {
-        sink.set_volume(Volume::Linear(mark.base * duck.0 * g));
+    let step = dt / MUSIC_FADE;
+    for (e, mut mark, mut sink) in &mut music {
+        let keep = wanted == Some(mark.track);
+        if keep {
+            mark.gain = (mark.gain + step).min(1.0);
+        } else {
+            mark.gain = (mark.gain - step).max(0.0);
+        }
+        sink.set_volume(Volume::Linear(mark.base * mark.gain * duck.0 * g));
+        // старый трек полностью ушёл — убираем
+        if !keep && mark.gain <= 0.0 {
+            commands.entity(e).despawn();
+        }
     }
 }
 
