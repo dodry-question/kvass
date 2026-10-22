@@ -1178,8 +1178,8 @@ pub fn run() {
 
     // --- 24. Логика начала дня: телепорт на спавн + заставка «ДЕНЬ N» ---
     assert_eq!(crate::tutorial::TUT_STEPS.len(), 10, "в обучении 10 шагов");
-    assert_eq!(crate::tutorial::TUT_STEPS[8].target, (1.5, 4.5), "шаг 9 — мойка");
-    assert_eq!(crate::tutorial::TUT_STEPS[9].target, (2.5, 6.5), "шаг 10 — мусорка");
+    assert_eq!(crate::tutorial::TUT_STEPS[8].target, (8.5, 5.5), "шаг 9 — мойка");
+    assert_eq!(crate::tutorial::TUT_STEPS[9].target, (5.5, 8.3), "шаг 10 — мусорка");
     let mut st = GameState::default();
     let mut day_barrels = Barrels::from_map(&map);
     let mut day_dirty = crate::day_cycle::Dirty::default();

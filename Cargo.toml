@@ -14,3 +14,7 @@ opt-level = 1
 
 [profile.dev.package."*"]
 opt-level = 3
+
+# Иконка exe/панели задач Windows: ресурс вшивается только при сборке под Windows.
+[target.'cfg(windows)'.build-dependencies]
+winres = "0.1"
