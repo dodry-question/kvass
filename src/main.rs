@@ -64,34 +64,30 @@ struct ScreenImages {
 }
 
 /// Каталог assets: рядом с exe, в текущей папке или в исходниках (dev-сборка).
-/// Настройка окна: полноэкранный borderless либо окно, если задана
-/// переменная `KVASS_WINDOWED` (например `KVASS_WINDOWED=1280x800`) —
-/// так удобно запускать под Wine/Bottles, где borderless может не открыться.
+/// Настройка окна: игра ВСЕГДА открывается полноэкранной (borderless на
+/// основном мониторе). Оконный режим — только явный флаг `--windowed`
+/// (для автотестов/отладки, в т.ч. под Wine/Bottles, где borderless
+/// может не открыться). Переменные окружения на режим окна не влияют.
 fn window_setup() -> Window {
     let title = format!("КВАСНАЯ ЛАВКА [{BUILD_ID}]");
-    match std::env::var("KVASS_WINDOWED") {
-        Ok(v) => {
-            let (w, h) = v
-                .split_once('x')
-                .and_then(|(a, b)| Some((a.parse().ok()?, b.parse().ok()?)))
-                .unwrap_or((1280, 800));
-            Window {
-                title,
-                mode: WindowMode::Windowed,
-                resolution: (w, h).into(),
-                ..default()
-            }
+    if std::env::args().any(|a| a == "--windowed") {
+        Window {
+            title,
+            mode: WindowMode::Windowed,
+            resolution: (1280, 800).into(),
+            ..default()
         }
-        Err(_) => Window {
+    } else {
+        Window {
             title,
             mode: WindowMode::BorderlessFullscreen(MonitorSelection::Primary),
             ..default()
-        },
+        }
     }
 }
 
 /// Идентификатор сборки — выводится в HUD для проверки версии exe (ТЗ).
-pub const BUILD_ID: &str = "BUILD 2026-10-22.22 TARE-FIX";
+pub const BUILD_ID: &str = "BUILD 2026-10-22.23 FULLSCREEN-MOUSE";
 
 pub fn assets_root() -> std::path::PathBuf {
     let mut bases: Vec<std::path::PathBuf> = Vec::new();
@@ -201,7 +197,7 @@ fn main() {
                     // снабжение, выбор тары) мир продолжает жить — гейтится
                     // только игровой ввод. Полная пауза — ESC (Phase::Paused).
                     player::movement.run_if(in_world).run_if(modal_closed),
-                    player::mouse_turn.run_if(modal_closed),
+                    player::mouse_turn.run_if(in_world).run_if(modal_closed),
                     grab_cursor,
                     slot_select.run_if(modal_closed),
                     menu::menu_input,
@@ -349,22 +345,19 @@ fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
 }
 
 fn grab_cursor(
-    buttons: Res<ButtonInput<MouseButton>>,
-    keys: Res<ButtonInput<KeyCode>>,
     mut cursors: Query<&mut CursorOptions, With<PrimaryWindow>>,
     state: Res<GameState>,
 ) {
-    // захват курсора — только в игре/обучении (в паузе и меню мышь свободна)
-    if buttons.just_pressed(MouseButton::Left)
-        && matches!(state.phase, Phase::Playing | Phase::Tutorial)
-    {
-        for mut c in &mut cursors {
-            c.grab_mode = CursorGrabMode::Locked;
-            c.visible = false;
-        }
-    }
-    if keys.just_pressed(KeyCode::Escape) {
-        for mut c in &mut cursors {
+    // Мышь привязана к камере сразу при входе в игру/обучение — кликать
+    // не нужно. В меню, паузе и на экранах итогов курсор свободен и виден.
+    let want_grab = matches!(state.phase, Phase::Playing | Phase::Tutorial);
+    for mut c in &mut cursors {
+        if want_grab {
+            if c.grab_mode != CursorGrabMode::Locked || c.visible {
+                c.grab_mode = CursorGrabMode::Locked;
+                c.visible = false;
+            }
+        } else if c.grab_mode != CursorGrabMode::None || !c.visible {
             c.grab_mode = CursorGrabMode::None;
             c.visible = true;
         }

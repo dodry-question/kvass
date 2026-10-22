@@ -120,6 +120,10 @@ pub fn draw_frame(
                 props,
             );
             draw_bubbles(canvas, font, &bubbles);
+            // точка-«мушка» в центре: видна только в мире и не мешает модалкам
+            if !modal.is_open() {
+                draw_aim_dot(canvas);
+            }
             if state.phase == Phase::Tutorial && !modal.is_open() {
                 // Внизу по умолчанию; на время мини-игр (полоски QTE или
                 // мойка бочки) поднимаем выше них, чтобы не закрывать игру.
@@ -380,6 +384,16 @@ fn bubble_layout(customers: &[CustView], font: &Font, cam: &GameCam) -> Vec<Bubb
         });
     }
     out
+}
+
+/// Маленькая точка в центре экрана — «мушка», а не перекрестие:
+/// игра не шутер, но точка помогает держать направление взгляда.
+fn draw_aim_dot(c: &mut Canvas) {
+    let x = CV_W / 2;
+    let y = CV_H / 2;
+    // тёмная обводка — чтобы точка читалась и на светлой стене
+    c.rect(x - 2, y - 2, 5, 5, col::BLACK, 140);
+    c.rect(x - 1, y - 1, 3, 3, [245, 240, 214], 235);
 }
 
 fn draw_bubbles(c: &mut Canvas, font: &Font, bubbles: &[Bubble]) {

@@ -76,13 +76,19 @@ fn blocked(map: &Map, x: f32, y: f32) -> bool {
     false
 }
 
-/// Поворот мышью: включаем grab по клику, крутим камеру.
+/// Поворот мышью. Захват курсора включается автоматически при входе в игру
+/// (см. `grab_cursor`), здесь только читаем накопленное смещение.
 pub fn mouse_turn(
     mut motion: MessageReader<bevy::input::mouse::MouseMotion>,
     mut cam: ResMut<GameCam>,
 ) {
     let mut dx = 0.0;
     for ev in motion.read() {
+        // При захвате/перецентровке курсора ОС может прислать один большой
+        // скачок — такие события игнорируем, чтобы камеру не дёргало.
+        if ev.delta.length_squared() > 300.0 * 300.0 {
+            continue;
+        }
         dx += ev.delta.x;
     }
     cam.angle += dx * MOUSE_SENS;

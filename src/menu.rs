@@ -19,7 +19,7 @@ use std::sync::OnceLock;
 
 use bevy::audio::{GlobalVolume, Volume};
 use bevy::prelude::*;
-use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
+use bevy::window::{PrimaryWindow, Window};
 
 use crate::canvas::{CV_H, CV_W};
 use crate::day_cycle::{
@@ -209,20 +209,14 @@ pub fn menu_input(
     mut keys: ResMut<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
     windows: Query<&Window, With<PrimaryWindow>>,
-    mut cursors: Query<&mut CursorOptions, With<PrimaryWindow>>,
     mut commands: Commands,
     bank: Option<Res<crate::audio::SoundBank>>,
 ) {
     if state.phase != Phase::Menu {
         return;
     }
-    // курсор в меню всегда свободен (игровой захват — только в мире)
-    for mut c in &mut cursors {
-        if c.grab_mode != CursorGrabMode::None || !c.visible {
-            c.grab_mode = CursorGrabMode::None;
-            c.visible = true;
-        }
-    }
+    // курсор в меню всегда свободен — этим занимается `grab_cursor`
+    // (единая точка управления захватом мыши по фазе игры)
     // уведомления («ОБУЧЕНИЕ ПРОЙДЕНО») гаснут и на экране меню
     if state.msg_t > 0.0 {
         state.msg_t = (state.msg_t - time.delta_secs()).max(0.0);
