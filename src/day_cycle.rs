@@ -29,6 +29,18 @@ pub enum Phase {
     Paused,
 }
 
+/// Какой экран меню показывать (обои с кнопками на фоне).
+#[derive(Clone, Copy, PartialEq, Debug, Default)]
+pub enum MenuView {
+    /// Главное меню: кнопки ВХОД/ПРОДОЛЖИТЬ/ОБУЧЕНИЕ/НАСТРОЙКИ/ВЫХОД.
+    #[default]
+    Main,
+    /// Экран настроек (громкость).
+    Settings,
+    /// Окно с настоятельной рекомендацией пройти обучение (перед ВХОДом).
+    Advice,
+}
+
 #[derive(Resource)]
 pub struct GameState {
     pub day: u32,
@@ -61,6 +73,18 @@ pub struct GameState {
     /// Тревога (ТЗ №5): >0 — бандиты на подходе, экран пульсирует красным.
     /// Убывает в `day_system`, выставляется при спавне хулигана.
     pub alarm_t: f32,
+    /// Экран меню (главное / настройки / рекомендация обучения).
+    pub menu_view: MenuView,
+    /// Выбранный пункт меню — индекс среди ВИДИМЫХ кнопок.
+    pub menu_sel: u8,
+    /// Громкость в настройках: 0..=10 (0 — тишина, 10 — 100%).
+    pub menu_vol: u8,
+    /// Есть прогресс (игра запускалась) — активен слот «ПРОДОЛЖИТЬ».
+    pub has_progress: bool,
+    /// Обучение запущено из меню — пропуск (T) запрещён.
+    pub tut_locked: bool,
+    /// Куда вести после обучения: в игровой цикл (`true`) или в меню.
+    pub tut_after_game: bool,
 }
 
 impl Default for GameState {
@@ -87,6 +111,12 @@ impl Default for GameState {
             face_t: 0.0,
             wash_bar: 0.0,
             alarm_t: 0.0,
+            menu_view: MenuView::Main,
+            menu_sel: 0,
+            menu_vol: 10,
+            has_progress: false,
+            tut_locked: false,
+            tut_after_game: false,
         }
     }
 }
@@ -139,6 +169,8 @@ pub fn start_day(
         *b = crate::brewing::Barrel::new();
     }
     dirty.0 = 0;
+    // слот «ПРОДОЛЖИТЬ» в главном меню появляется после первого запуска дня
+    state.has_progress = true;
     let d = state.day;
     let n = state.norm;
     state.notify(format!("ДЕНЬ {d} НАЧАЛСЯ! НОРМА {n} К. ОКНО СНАБЖЕНИЯ (E)"));
@@ -185,7 +217,6 @@ pub const PAUSE_ITEMS: u8 = 3;
 pub fn phase_system(
     mut keys: ResMut<ButtonInput<KeyCode>>,
     mut state: ResMut<GameState>,
-    mut inv: ResMut<crate::inventory::Inventory>,
     mut commands: Commands,
     mut barrels: ResMut<crate::brewing::Barrels>,
     customers: Query<Entity, With<Customer>>,
@@ -193,20 +224,8 @@ pub fn phase_system(
 ) {
     match state.phase {
         Phase::Menu => {
-            let go = keys.just_pressed(KeyCode::Enter)
-                || keys.just_pressed(KeyCode::NumpadEnter)
-                || keys.just_pressed(KeyCode::Space);
-            if go {
-                give_start_package(&mut state, &mut inv);
-                if state.tut_done {
-                    start_day(&mut state, &mut barrels, &mut dirty);
-                } else {
-                    state.phase = Phase::Tutorial;
-                    state.tut_step = 0;
-                    state.notify("ОБУЧЕНИЕ. W A S D - ХОД, МЫШЬ - ОБЗОР".into());
-                }
-                keys.clear(); // ТЗ №1: клавиша не протекает в другие системы кадра
-            }
+            // Ввод меню (мышь + клавиатура) целиком в menu::menu_input:
+            // ВХОД/ОБУЧЕНИЕ/НАСТРОЙКИ/ВЫХОД и окно рекомендации обучения.
         }
         Phase::DayEnd => {
             let go = keys.just_pressed(KeyCode::Enter)
@@ -232,6 +251,10 @@ pub fn phase_system(
         Phase::Final => {
             if keys.just_pressed(KeyCode::Escape) {
                 state.phase = Phase::Menu;
+                state.menu_view = MenuView::Main;
+                state.menu_sel = 0;
+                // игра пройдена — «продолжать» больше нечего
+                state.has_progress = false;
                 keys.clear(); // ТЗ №1
             }
         }
@@ -284,6 +307,8 @@ pub fn phase_system(
                         dirty.0 = 0;
                         state.msg_t = 0.0;
                         state.phase = Phase::Menu;
+                        state.menu_view = MenuView::Main;
+                        state.menu_sel = 0;
                         keys.clear(); // ТЗ №1
                     }
                     _ => {

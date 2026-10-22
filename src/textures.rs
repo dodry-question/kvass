@@ -252,7 +252,11 @@ fn gen_counter(t: &mut Vec<u8>) {
                 } else {
                     idx::SHADOW
                 }
-            } else if (15..24).contains(&y) && (x - 18) % 6 >= 1 && (x - 18) % 6 <= 4 {
+            } else if (15..24).contains(&y)
+                && x >= 18
+                && (x - 18) % 6 >= 1
+                && (x - 18) % 6 <= 4
+            {
                 // РїРѕР»Рµ РєР»Р°РІРёС€
                 let row = y / 5;
                 let col_key = (x - 18) / 6;

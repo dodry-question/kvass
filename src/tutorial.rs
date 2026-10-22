@@ -75,7 +75,9 @@ pub fn tutorial_system(
 
     // T: на шаге мини-игры (5) пропускает только этот шаг,
     // на остальных — пропускает обучение целиком.
-    if keys.just_pressed(KeyCode::KeyT) {
+    // ТЗ меню: обучение, запущенное кнопкой ОБУЧЕНИЕ (tut_locked), не
+    // пропускается вообще — пройти придётся до конца.
+    if keys.just_pressed(KeyCode::KeyT) && !state.tut_locked {
         if state.tut_step == 4 {
             state.tut_step = 5;
             state.notify("ТАК ДЕРЖАТЬ!".into());
@@ -169,7 +171,17 @@ fn finish(
     for (e, _) in customers.iter() {
         commands.entity(e).despawn();
     }
-    give_start_package(state, inv);
-    // ТЗ №3: день начинается сразу, без экрана закупки.
-    start_day(state, barrels, dirty);
+    if state.tut_after_game {
+        // обучение — вход в основной цикл: день стартует сразу
+        give_start_package(state, inv);
+        // ТЗ №3: день начинается сразу, без экрана закупки.
+        start_day(state, barrels, dirty);
+    } else {
+        // обучение из меню — отдельная секция: возвращаемся в главное меню
+        state.phase = Phase::Menu;
+        state.menu_view = crate::day_cycle::MenuView::Main;
+        state.menu_sel = 0;
+        state.tut_locked = false;
+        state.notify("ОБУЧЕНИЕ ПРОЙДЕНО! ЖДЁМ ВАС ЗА ПРИЛАВКОМ".into());
+    }
 }

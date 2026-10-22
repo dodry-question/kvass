@@ -95,6 +95,82 @@ pub fn run() {
     );
     snap(&canvas, None, "1_menu.bmp");
 
+    // --- 1б. Меню с активным слотом «ПРОДОЛЖИТЬ» (есть прогресс) ---
+    let state = GameState {
+        phase: Phase::Menu,
+        has_progress: true,
+        ..Default::default()
+    };
+    canvas.clear();
+    ui::draw_frame(
+        &mut canvas,
+        &font,
+        &state,
+        &empty_inv,
+        &Barrels::from_map(&map),
+        &no_qte,
+        &no_cool,
+        &no_cust,
+        1.0,
+        &cam,
+        &map,
+        false,
+        &no_modal,
+        &no_props,
+    );
+    snap(&canvas, None, "1b_menu_continue.bmp");
+
+    // --- 1в. Экран настроек (громкость) ---
+    let state = GameState {
+        phase: Phase::Menu,
+        menu_view: crate::day_cycle::MenuView::Settings,
+        menu_vol: 7,
+        ..Default::default()
+    };
+    canvas.clear();
+    ui::draw_frame(
+        &mut canvas,
+        &font,
+        &state,
+        &empty_inv,
+        &Barrels::from_map(&map),
+        &no_qte,
+        &no_cool,
+        &no_cust,
+        1.0,
+        &cam,
+        &map,
+        false,
+        &no_modal,
+        &no_props,
+    );
+    snap(&canvas, None, "1c_menu_settings.bmp");
+
+    // --- 1г. Окно рекомендации обучения (ВХОД до пройденного обучения) ---
+    let state = GameState {
+        phase: Phase::Menu,
+        menu_view: crate::day_cycle::MenuView::Advice,
+        ..Default::default()
+    };
+    canvas.clear();
+    ui::draw_frame(
+        &mut canvas,
+        &font,
+        &state,
+        &empty_inv,
+        &Barrels::from_map(&map),
+        &no_qte,
+        &no_cool,
+        &no_cust,
+        1.0,
+        &cam,
+        &map,
+        false,
+        &no_modal,
+        &no_props,
+    );
+    snap(&canvas, None, "1d_menu_advice.bmp");
+
     // --- 2. Окно снабжения (ТЗ №3): модалка поверх приглушённого мира ---
     let inv = Inventory {
         hands: [None; 4],

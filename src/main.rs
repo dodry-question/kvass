@@ -17,6 +17,7 @@ mod font;
 mod inventory;
 mod interact;
 mod map;
+mod menu;
 mod modals;
 mod palette;
 mod player;
@@ -90,7 +91,7 @@ fn window_setup() -> Window {
 }
 
 /// Идентификатор сборки — выводится в HUD для проверки версии exe (ТЗ).
-pub const BUILD_ID: &str = "BUILD 2026-10-21.14 TIME-FLOW";
+pub const BUILD_ID: &str = "BUILD 2026-10-22.15 MENU-WALLPAPER";
 
 pub fn assets_root() -> std::path::PathBuf {
     let mut bases: Vec<std::path::PathBuf> = Vec::new();
@@ -115,19 +116,35 @@ pub fn assets_root() -> std::path::PathBuf {
     std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/assets"))
 }
 
-/// Кадр растягивается ровно на всё окно (полноэкранный режим).
+/// Квадрат сцены: показывается ровно в область 4:3 по центру окна
+/// (чёрные полоски по краям — см. `stage_43`).
 #[derive(Component)]
 struct ScreenQuad;
 
+/// Геометрия сцены: фиксированная область 4:3, вписанная в окно и
+/// центрированная в нём (возвращает x, y, w, h от левого верхнего угла
+/// окна). Вокруг — чёрные полоски: на большом/широком экране кадр больше
+/// не растягивается, а всегда строго 4:3 (пропорция ложится и на мир, и на
+/// UI-канвас 1280×800 одинаково).
+pub fn stage_43(win_w: f32, win_h: f32) -> (f32, f32, f32, f32) {
+    let h = win_h.min(win_w * 3.0 / 4.0).floor().max(1.0);
+    let w = (h * 4.0 / 3.0).floor().max(1.0);
+    ((win_w - w) / 2.0, (win_h - h) / 2.0, w, h)
+}
+
+/// Оба кадра (мир и UI) — ровно в область 4:3 по центру окна.
 fn fit_screen(
     windows: Query<&Window, With<PrimaryWindow>>,
     mut quads: Query<&mut Sprite, With<ScreenQuad>>,
 ) {
     let Ok(w) = windows.single() else { return };
-    let size = Vec2::new(w.resolution.width(), w.resolution.height());
-    if size.x < 16.0 || size.y < 16.0 {
+    let ww = w.resolution.width();
+    let wh = w.resolution.height();
+    if ww < 16.0 || wh < 16.0 {
         return;
     }
+    let (_, _, sw, sh) = stage_43(ww, wh);
+    let size = Vec2::new(sw, sh);
     for mut s in &mut quads {
         if s.custom_size != Some(size) {
             s.custom_size = Some(size);
@@ -172,7 +189,7 @@ fn main() {
                     ..default()
                 }),
         )
-        .insert_resource(ClearColor(Color::srgb(0.09, 0.07, 0.06)))
+        .insert_resource(ClearColor(Color::srgb(0.0, 0.0, 0.0)))
         .init_resource::<modals::Modals>()
         .init_resource::<interact::CoolQte>()
         .add_systems(Startup, (setup, audio::load_bank).chain())
@@ -187,6 +204,7 @@ fn main() {
                     player::mouse_turn.run_if(modal_closed),
                     grab_cursor,
                     slot_select.run_if(modal_closed),
+                    menu::menu_input,
                     day_cycle::phase_system.run_if(modal_closed),
                     day_cycle::day_system,
                     tutorial::tutorial_system.run_if(modal_closed),
@@ -252,7 +270,7 @@ fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
         TextureFormat::Rgba8Unorm,
         RenderAssetUsages::all(),
     );
-    // Квадрат экрана: растягивается ровно на всё окно (полноэкранный режим)
+    // Квадрат экрана: каждая секунда подгоняется fit_screen под 4:3-сцену
     image.sampler = ImageSampler::nearest();
     let handle = images.add(image);
 

@@ -92,7 +92,7 @@ pub fn draw_frame(
     props: &[crate::sprites::WorldProp],
 ) {
     match state.phase {
-        Phase::Menu => draw_menu(canvas, font, t),
+        Phase::Menu => draw_menu(canvas, font, state, t),
         Phase::DayEnd => draw_dayend(canvas, font, state, t),
         Phase::Final => draw_final(canvas, font, t),
         Phase::Paused => {
@@ -852,13 +852,29 @@ fn draw_tutorial(
     };
     let ts_size = SZ_M;
     let skip = "ПРОПУСТИТЬ";
-    let w = (font.w(ts.text, ts_size).max(font.w(skip, SZ_S) + 70) + 72).max(520);
+    // обучение из меню (tut_locked) — без пропуска: ни клавиши T, ни панели
+    let locked = state.tut_locked;
+    let skip_w = if locked { 0 } else { font.w(skip, SZ_S) + 70 };
+    let w = (font.w(ts.text, ts_size).max(skip_w) + 72).max(520);
+    let h = if locked { 70 } else { 88 };
     let x = ((CV_W - w) / 2).max(8);
     let y = TUT_Y;
-    panel(c, x, y, w, 88);
+    panel(c, x, y, w, h);
     font.draw(c, x + 24, y + 14, ts.text, ts_size, col::LAMP, 255);
-    let kx = keycap(c, font, x + 24, y + 52, 26, "T");
-    font.draw(c, x + kx + 34, y + 56, skip, SZ_S, col::TILE, 255);
+    if locked {
+        font.draw(
+            c,
+            x + 24,
+            y + 44,
+            "ОБУЧЕНИЕ НЕЛЬЗЯ ПРОПУСТИТЬ",
+            SZ_S,
+            col::TILE,
+            255,
+        );
+    } else {
+        let kx = keycap(c, font, x + 24, y + 52, 26, "T");
+        font.draw(c, x + kx + 34, y + 56, skip, SZ_S, col::TILE, 255);
+    }
 
     // цель: на последнем шаге — сама бабушка
     let target = if step == 7 {
@@ -912,66 +928,244 @@ fn draw_tutorial(
 
 // =================== Экраны ===================
 
-fn draw_menu(c: &mut Canvas, font: &Font, t: f32) {
-    // уличный фон
-    c.rect(0, 0, CV_W, 240, col::SKY, 255);
-    c.rect(0, 240, CV_W, 200, col::LEAVES, 255);
-    c.rect(0, 440, CV_W, CV_H - 440, col::TILE_D, 255);
-    for yy in (460..CV_H).step_by(56) {
-        c.rect(0, yy, CV_W, 2, [70, 84, 70], 255);
+/// Главное меню на обоях лавки (assets/menu_bg.png): заголовок, колонка
+/// кнопок и подсказка ввода. Старый «входной» экран с киоском удалён —
+/// его заменяет пиксельная обоиная картинка.
+fn draw_menu(c: &mut Canvas, font: &Font, state: &GameState, t: f32) {
+    draw_menu_bg(c);
+
+    // титул слева сверху — на пустом небе обоев
+    red_plate(c, 70, 84, 640, 130);
+    font.draw_fit_sh(c, 70, 104, 640, "КВАСНАЯ ЛАВКА", SZ_H, col::WHITE, 255);
+    font.draw_fit_sh(c, 70, 182, 640, "VYATKA OWLS GAME JAM", SZ_S, col::PLASTER, 240);
+
+    // колонка кнопок: слоты фиксированы: слот 0 (ПРОДОЛЖИТЬ) резервируется
+    // всегда, но без прогресса остаётся пустым
+    let lay = crate::menu::layout(state.has_progress);
+    for e in &lay {
+        let (x, y, w, h) = crate::menu::btn_rect(e.slot);
+        menu_button(
+            c,
+            font,
+            x,
+            y,
+            w,
+            h,
+            e.btn.label(),
+            state.menu_sel as usize == e.vis,
+        );
     }
 
-    // киоск с красно-белым тентом
-    for r in 0..30 {
-        let y = 208 + r * 4;
-        let half = 110 + (r * 50) / 30;
-        let stripe = if (r / 2) % 2 == 0 { col::RED } else { col::PLASTER };
-        c.rect(640 - half - 40, y, half * 2 + 80, 4, stripe, 255);
-        c.rect(640 - half - 40, y, 4, 4, col::BLACK, 255);
-        c.rect(640 + half + 36, y, 4, 4, col::BLACK, 255);
+    // тост из меню (например, «ОБУЧЕНИЕ ПРОЙДЕНО» после обучения)
+    if state.msg_t > 0.0 && state.menu_view == crate::day_cycle::MenuView::Main {
+        let tw = (font.w(&state.msg, SZ_M) + 48).min(CV_W - 40);
+        let tx = (CV_W - tw) / 2;
+        c.rect(tx + 4, 24, tw, 44, [0, 0, 0], 170);
+        c.rect(tx, 20, tw, 44, col::SHAD, 245);
+        c.frame(tx, 20, tw, 44, col::BLACK, 255);
+        font.draw_fit_sh(c, tx + 12, 30, tw - 24, &state.msg, SZ_M, col::LAMP, 255);
     }
-    // коробка киоска
-    c.rect(480, 328, 320, 120, col::WOOD, 255);
-    for i in 0..4 {
-        c.rect(480, 344 + i * 24, 320, 6, col::WOOD_D, 255);
-    }
-    c.frame(480, 328, 320, 120, col::BLACK, 255);
-    // вывеска «КВАС»
-    red_plate(c, 552, 352, 176, 52);
-    font.draw_fit_sh(c, 552, 364, 176, "КВАС", SZ_L, col::WHITE, 255);
-    // бочка с краном
-    c.rect(600, 456, 88, 84, col::WOOD, 255);
-    c.rect(600, 476, 88, 6, col::WOOD_D, 255);
-    c.rect(600, 512, 88, 6, col::WOOD_D, 255);
-    c.frame(600, 456, 88, 84, col::BLACK, 255);
-    c.rect(632, 544, 24, 20, col::METAL, 255);
-    c.frame(632, 544, 24, 20, col::BLACK, 255);
 
-    // титул
-    red_plate(c, 60, 24, 1160, 130);
-    font.draw_fit_sh(c, 60, 44, 1160, "КВАСНАЯ ЛАВКА", SZ_H, col::WHITE, 255);
-    font.draw_fit_sh(c, 60, 122, 1160, "VYATKA OWLS GAME JAM", SZ_S, col::PLASTER, 240);
-
-    // подсказки с кейкапами
-    let hints: [(&str, &str); 4] = [
-        ("ENTER", "НАЧАТЬ ИГРУ"),
-        ("WASD", "ХОД, МЫШЬ - ОБЗОР"),
-        ("E", "ДЕЙСТВИЕ, 1-4 - СЛОТЫ"),
-        ("ESC", "ПАУЗА"),
-    ];
-    let mut hy = 576;
-    for (k, text) in hints {
-        let kw = (font.w(k, SZ_S) + 22).max(34);
-        let row_w = kw + 24 + font.w(text, SZ_M);
-        let x0 = (CV_W - row_w) / 2;
-        let kx = keycap(c, font, x0, hy, 32, k);
-        font.draw_sh(c, x0 + kx + 24, hy + 6, text, SZ_M, col::WHITE, 255);
-        hy += 46;
-    }
+    // подсказка ввода в нижней полоске обоев
     if blink(t, 2.0) {
-        let coin = "ВСТАВЬТЕ МОНЕТУ";
-        let w = font.w(coin, SZ_M);
-        font.draw_sh(c, (CV_W - w) / 2, 762, coin, SZ_M, col::LAMP, 255);
+        let hint = "МЫШЬ - КЛИК   СТРЕЛКИ - ВЫБОР   ENTER - ОК";
+        let w = font.w(hint, SZ_S);
+        font.draw(c, (CV_W - w) / 2, 772, hint, SZ_S, col::WHITE, 255);
+    }
+
+    match state.menu_view {
+        crate::day_cycle::MenuView::Main => {}
+        crate::day_cycle::MenuView::Settings => draw_menu_settings(c, font, state),
+        crate::day_cycle::MenuView::Advice => draw_menu_advice(c, font, state, t),
+    }
+}
+
+/// Обои 1280×720: рисуются 1:1 по ширине (без искажения пикселей),
+/// сверху/снизу — полоски в тон левым краям картинки. Нет файла — тёмная
+/// заливка-запаска.
+fn draw_menu_bg(c: &mut Canvas) {
+    let Some(bg) = crate::menu::bg() else {
+        c.rect(0, 0, CV_W, CV_H, col::INK, 255);
+        return;
+    };
+    let scale = CV_W as f32 / bg.w as f32;
+    let dh = (bg.h as f32 * scale) as i32;
+    let y0 = ((CV_H - dh) / 2).max(0);
+    // полоски в тон левому верхнему и левому нижнему пикселям картинки
+    let top = [bg.px[0], bg.px[1], bg.px[2]];
+    let bi = (bg.h - 1) * bg.w * 4;
+    let bot = [bg.px[bi], bg.px[bi + 1], bg.px[bi + 2]];
+    c.rect(0, 0, CV_W, y0, top, 255);
+    c.rect(0, y0 + dh, CV_W, CV_H - (y0 + dh), bot, 255);
+    // сама картинка (nearest по ширине; при 1280 — точное копирование)
+    for dy in 0..dh {
+        let sy = ((dy as f32 / scale) as usize).min(bg.h - 1);
+        let di = ((y0 + dy) as usize * CV_W as usize) * 4;
+        let si = sy * bg.w * 4;
+        for dx in 0..CV_W as usize {
+            let sx = ((dx as f32 / scale) as usize).min(bg.w - 1);
+            let s = si + sx * 4;
+            let d = di + dx * 4;
+            c.px[d] = bg.px[s];
+            c.px[d + 1] = bg.px[s + 1];
+            c.px[d + 2] = bg.px[s + 2];
+            c.px[d + 3] = 255;
+        }
+    }
+}
+
+/// Кнопка меню: тёмная эмалевая табличка; выбранная/под курсором —
+/// красная лента с янтарным текстом и маркером-треугольником.
+fn menu_button(
+    c: &mut Canvas,
+    font: &Font,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    label: &str,
+    selected: bool,
+) {
+    let tw = font.w(label, SZ_L);
+    let tx = x + (w - tw) / 2 + if selected { 8 } else { 0 };
+    if selected {
+        c.rect(x + 5, y + 6, w, h, [0, 0, 0], 190);
+        c.rect(x, y, w, h, col::RED_D, 255);
+        c.frame(x, y, w, h, col::BLACK, 255);
+        c.frame(x + 1, y + 1, w - 2, h - 2, col::BLACK, 255);
+        c.rect(x + 3, y + 3, w - 6, 2, [255, 150, 150], 90);
+        c.rect(x + 3, y + h - 5, w - 6, 2, [0, 0, 0], 170);
+        // маркер-треугольник слева — только если не наезжает на широкий текст
+        if tx > x + 36 {
+            for dx in 0..12 {
+                let half = dx / 2;
+                for dy in -half..=half {
+                    c.blend(x + 16 + dx, y + h / 2 + dy, col::LAMP, 255);
+                }
+            }
+        }
+    } else {
+        c.rect(x + 5, y + 6, w, h, [0, 0, 0], 165);
+        c.rect(x, y, w, h, col::SHAD, 245);
+        c.frame(x, y, w, h, col::BLACK, 255);
+        c.frame(x + 1, y + 1, w - 2, h - 2, col::BLACK, 255);
+        c.rect(x + 3, y + 3, w - 6, 2, col::TILE, 110);
+        c.rect(x + 3, y + h - 5, w - 6, 2, [0, 0, 0], 170);
+    }
+    let ty = y + (h - font.cap_h(SZ_L)) / 2 - 4;
+    let (fc, fa) = if selected {
+        (col::LAMP, 255)
+    } else {
+        (col::WHITE, 255)
+    };
+    font.draw_sh(c, tx, ty, label, SZ_L, fc, fa);
+}
+
+/// Квадратная клавиша «−» / «+» экрана настроек.
+fn step_btn(c: &mut Canvas, font: &Font, x: i32, y: i32, w: i32, h: i32, sym: &str) {
+    c.rect(x + 3, y + 4, w, h, [0, 0, 0], 170);
+    c.rect(x, y, w, h, col::TILE, 255);
+    c.rect(x, y, w, 2, col::WHITE, 90);
+    c.rect(x, y + h - 2, w, 2, col::TILE_D, 255);
+    c.frame(x, y, w, h, col::INK, 255);
+    let tx = x + (w - font.w(sym, SZ_T)) / 2;
+    let ty = y + (h - font.cap_h(SZ_T)) / 2 - 4;
+    font.draw(c, tx, ty, sym, SZ_T, col::INK, 255);
+}
+
+/// Экран настроек поверх приглушённых обоев: громкость и «НАЗАД».
+fn draw_menu_settings(c: &mut Canvas, font: &Font, state: &GameState) {
+    c.dim(150);
+    let (px, py, pw, ph) = crate::menu::SET_PANEL;
+    panel(c, px, py, pw, ph);
+    red_plate(c, px + 40, py + 24, pw - 80, 54);
+    font.draw_fit_sh(c, px + 40, py + 36, pw - 80, "НАСТРОЙКИ", SZ_L, col::WHITE, 255);
+
+    // строка громкости (0 = выбрана — подсвечена янтарным)
+    let vol_sel = state.menu_sel == 0;
+    let lab_col = if vol_sel { col::LAMP } else { col::WHITE };
+    font.draw(c, px + 46, py + 90, "ГРОМКОСТЬ ЗВУКА", SZ_M, lab_col, 255);
+
+    let (mx, my, mw, mh) = crate::menu::SET_MINUS;
+    step_btn(c, font, mx, my, mw, mh, "-");
+    let (ax, ay, aw, ah) = crate::menu::SET_PLUS;
+    step_btn(c, font, ax, ay, aw, ah, "+");
+
+    // полоска
+    let (bx, by, bw, bh) = crate::menu::SET_BAR;
+    c.rect(bx - 3, by - 3, bw + 6, bh + 6, [16, 13, 10], 235);
+    c.frame(bx - 3, by - 3, bw + 6, bh + 6, col::BLACK, 255);
+    let fw = ((bw - 4) as f32 * state.menu_vol as f32 / 10.0) as i32;
+    if fw > 0 {
+        c.rect(bx - 1, by - 1, fw, bh + 2, col::KVASS_L, 255);
+        c.rect(bx - 1, by - 1, fw, 2, col::WHITE, 70);
+    }
+    let pct = format!("{}%", state.menu_vol * 10);
+    font.draw_sh(
+        c,
+        bx + (bw - font.w(&pct, SZ_L)) / 2,
+        by + bh + 14,
+        &pct,
+        SZ_L,
+        col::LAMP,
+        255,
+    );
+
+    // кнопка «НАЗАД»
+    let (kx, ky, kw, kh) = crate::menu::SET_BACK;
+    menu_button(c, font, kx, ky, kw, kh, "НАЗАД", state.menu_sel == 1);
+
+    font.draw_fit_sh(
+        c,
+        px + 20,
+        py + ph - 34,
+        pw - 40,
+        "A/D - ГРОМКОСТЬ   ESC - НАЗАД",
+        SZ_S,
+        col::TILE,
+        240,
+    );
+}
+
+/// Окно с настоятельной рекомендацией пройти обучение (открывается по ВХОД
+/// до первого пройденного обучения).
+fn draw_menu_advice(c: &mut Canvas, font: &Font, state: &GameState, t: f32) {
+    c.dim(170);
+    let (px, py, pw, ph) = crate::menu::ADV_PANEL;
+    panel(c, px, py, pw, ph);
+    red_plate(c, px + 40, py + 24, pw - 80, 56);
+    font.draw_fit_sh(c, px + 40, py + 36, pw - 80, "ВНИМАНИЕ!", SZ_L, col::WHITE, 255);
+
+    let lines = [
+        "НАСТОЯТЕЛЬНО РЕКОМЕНДУЕМ ПРОЙТИ ОБУЧЕНИЕ!",
+        "ЛАВКА ЖЕСТОКА К НОВИЧКАМ: НОРМА РАСТЁТ,",
+        "ТАРА ГРЯЗНАЯ, БАНДИТЫ НЕ ЖДУТ.",
+        "БЕЗ ПОДГОТОВКИ ПЕРВЫЙ ДЕНЬ ПОЧТИ ГАРАНТИРОВАННО",
+        "СТАНЕТ ПОСЛЕДНИМ.",
+    ];
+    let mut ly = py + 112;
+    for (i, l) in lines.iter().enumerate() {
+        let lc = if i == 0 { col::LAMP } else { col::PLASTER };
+        font.draw_fit_sh(c, px + 40, ly, pw - 80, l, SZ_M, lc, 255);
+        ly += 34;
+    }
+
+    let (ax, ay, aw, ah) = crate::menu::ADV_TRAIN;
+    menu_button(c, font, ax, ay, aw, ah, "ПРОЙТИ ОБУЧЕНИЕ", state.menu_sel == 0);
+    let (bx, by, bw, bh) = crate::menu::ADV_SKIP;
+    menu_button(c, font, bx, by, bw, bh, "НАЧАТЬ СРАЗУ", state.menu_sel == 1);
+
+    if blink(t, 2.0) {
+        font.draw_fit_sh(
+            c,
+            px + 40,
+            py + ph - 34,
+            pw - 80,
+            "ОБУЧЕНИЕ НЕЛЬЗЯ ПРОПУСТИТЬ",
+            SZ_S,
+            col::TILE,
+            240,
+        );
     }
 }
 
