@@ -14,8 +14,8 @@ pub struct GameRng(pub StdRng);
 pub struct Dirty(pub u32);
 
 /// Точка появления игрока в начале каждого дня (и после обучения).
-pub const SPAWN_X: f32 = 5.5;
-pub const SPAWN_Y: f32 = 4.8;
+pub const SPAWN_X: f32 = 6.5;
+pub const SPAWN_Y: f32 = 5.75;
 pub const SPAWN_ANGLE: f32 = -std::f32::consts::FRAC_PI_2;
 
 /// Сколько секунд идёт заставка «ДЕНЬ N» в начале дня: чёрный экран

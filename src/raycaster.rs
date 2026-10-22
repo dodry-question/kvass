@@ -28,6 +28,22 @@ pub struct GameCam {
     pub angle: f32,
 }
 
+/// Один низкий тайл (полублок) на луче: прилавок или бочка.
+/// Нужен, чтобы рисовать ВСЕ клетки ряда, а не только первую.
+#[derive(Clone, Copy)]
+struct LowHit {
+    tile: Tile,
+    side: usize,
+    perp: f32,
+    cx: i32,
+    cy: i32,
+    /// Верх/низ фасада на экране.
+    start: i32,
+    end: i32,
+    /// Верхняя кромка силуэта (дальняя кромка крышки или верх фасада).
+    lid_top: i32,
+}
+
 pub struct Renderer {
     /// Палитровые индексы кадра.
     pub indices: Vec<u8>,
@@ -40,6 +56,10 @@ pub struct Renderer {
     /// Верхняя строка силуэта низкой мебели (крышка) по колонкам:
     /// спрайты глубже неё обрезаются ровно по этой линии.
     pub zlow_top: Vec<i32>,
+    /// Все низкие блоки по колонкам: (глубина, верхняя кромка силуэта).
+    /// Спрайт за несколькими прилавками режется по самой высокой кромке
+    /// из тех, что находятся перед ним.
+    pub zlow_hits: Vec<Vec<(f32, i32)>>,
     colormap: [[u8; NUM_LIGHTS]; 24],
     /// RGBA выход.
     pub rgba: Vec<u8>,
@@ -66,6 +86,7 @@ impl Renderer {
             zbuf: vec![0.0; SCREEN_W],
             zlow: vec![f32::MAX; SCREEN_W],
             zlow_top: vec![SCREEN_H as i32; SCREEN_W],
+            zlow_hits: vec![Vec::new(); SCREEN_W],
             colormap: build_colormap(),
             rgba: vec![0; SCREEN_W * SCREEN_H * 4],
         }
@@ -74,6 +95,9 @@ impl Renderer {
     pub fn render(&mut self, map: &Map, tex: &Textures, cam: &GameCam, flicker: f32) {
         let mut idx = std::mem::take(&mut self.indices);
         idx.fill(0);
+        for v in self.zlow_hits.iter_mut() {
+            v.clear();
+        }
         let dir_x = cam.angle.cos();
         let dir_y = cam.angle.sin();
         let plane_x = -dir_y * FOV_SCALE;
@@ -117,7 +141,9 @@ impl Renderer {
         }
 
         // --- Стены (DDA; за низким прилавком луч продолжается к дальней стене) ---
+        let mut lows: Vec<LowHit> = Vec::with_capacity(8);
         for x in 0..SCREEN_W {
+            lows.clear();
             let camera_x = 2.0 * x as f32 / SCREEN_W as f32 - 1.0;
             let rdx = dir_x + plane_x * camera_x;
             let rdy = dir_y + plane_y * camera_x;
@@ -138,15 +164,11 @@ impl Renderer {
             let (mut side_x, mut side_y) = (side_x, side_y);
             let mut side = 0usize; // 0 = x-грань, 1 = y-грань
             let mut steps = 0;
-            // первая попавшаяся стена; если это прилавок — ещё и стена за ним
-            let mut first: Option<(Tile, usize, f32)> = None;
-            // клетка первой низкой мебели: нужна для честной крышки (её дальняя
-            // кромка считается по ГРАНИЦАМ ЭТОЙ клетки, а не по стене за ней)
-            let mut first_cell: Option<(i32, i32)> = None;
-            let mut second: Option<(Tile, usize, f32)> = None;
-            // первая ПОЛНАЯ стена за низкой мебелью — реальный ограничитель
-            // глубины спрайтов (см. zbuf ниже)
-            let mut far: Option<f32> = None;
+            // Собираем ВСЕ низкие блоки на луче до первой настоящей стены.
+            // Раньше запоминался только первый — из-за этого ряд прилавков
+            // выглядел как один блок, а «невидимый куб» над ним скрывал
+            // соседние клетки (баг «кассы за кассой исчезают»).
+            let mut wall: Option<(Tile, usize, f32)> = None;
             loop {
                 if side_x < side_y {
                     side_x += delta_x;
@@ -165,27 +187,20 @@ impl Renderer {
                         (map_y as f32 - cam.y + (1 - step_y) as f32 / 2.0) / rdy
                     })
                     .max(0.05);
-                    let low = is_low(t);
-                    if first.is_none() {
-                        first = Some((t, side, perp));
-                        first_cell = Some((map_x, map_y));
-                        if !low {
-                            break;
-                        }
+                    if is_low(t) {
+                        lows.push(LowHit {
+                            tile: t,
+                            side,
+                            perp,
+                            cx: map_x,
+                            cy: map_y,
+                            start: 0,
+                            end: 0,
+                            lid_top: 0,
+                        });
                     } else {
-                        // «второй» объект — для отрисовки над прилавком
-                        // (может быть и сам прилавок: вид косой вдоль ряда)
-                        if second.is_none() {
-                            second = Some((t, side, perp));
-                        }
-                        if !low {
-                            far = Some(perp);
-                            break;
-                        }
-                        // очередная клетка низкой мебели — едем дальше за
-                        // настоящей стеной, иначе спрайт за прилавком
-                        // «закрыт» соседней клеткой прилавка (баг: бабушки
-                        // не было видно, zbuf оказывался меньше её глубины)
+                        wall = Some((t, side, perp));
+                        break;
                     }
                 }
                 steps += 1;
@@ -193,182 +208,159 @@ impl Renderer {
                     break;
                 }
             }
-            let Some((hit_tile, side, perp)) = first else {
-                // Луч не попал ни в что (на закрытой карте не бывает): зовём
-                // буферы в исходное, чтобы спрайты не ушли за «стену»
-                // с прошлого кадра (ТЗ №2: протёкший z-буфер).
-                self.zbuf[x] = f32::MAX;
-                self.zlow[x] = f32::MAX;
-                self.zlow_top[x] = SCREEN_H as i32;
-                continue;
-            };
-            let low = is_low(hit_tile);
-            // Прилавок/бочка/мусорка — низкая мебель: покупателя за ней НЕЛЬЗЯ
-            // «резать» по кромке (баг «половина человека»). Ограничитель
-            // спрайтов ПО ЗАДНЕЙ СТЕНЕ — far, а сама мебель учитывается
-            // отдельной парой zlow/zlow_top (ТЗ №2: фасад прилавка нельзя
-            // «простреливать» спрайтом, стоящим за ним).
-            self.zbuf[x] = if low { far.unwrap_or(f32::MAX) } else { perp };
-            // Перспектива честная: высота стены — по реальному
-            // перпендикулярному расстоянию (кламп расстояния давал
-            // «сжатие» объектов вблизи: они переставали расти).
-            let perp_d = perp.max(0.2);
-            let full_h = (SCREEN_H as f32 / perp_d) as i32;
-            // прилавок — низкая стена до пола, за ней виден дальняя стена и
-            // покупатели. Кромка должна идти заметно ниже горизонта (а не
-            // практически на нём, как было при 0.48 — тогда людей резало
-            // ровно посередине экрана). 0.34: видно от колен вверх, и человек
-            // читается как стоящий за прилавком, а не «на» нём.
-            let frac = low_frac(hit_tile);
-            let wall_h = if low {
-                (full_h as f32 * frac) as i32
-            } else {
-                full_h
-            };
-            let end_raw = HORIZON + full_h / 2;
-            let start_raw = end_raw - wall_h;
-            let end = end_raw.min(SCREEN_H as i32);
-            let start = start_raw.max(0).min(SCREEN_H as i32);
-            // Геометрия крышки считается ЗДЕСЬ (а не в блоке отрисовки):
-            // её верхняя строка — это и есть линия, по которой спрайты за
-            // мебелью обрезаются. Если мебель достаёт до верха кадра
-            // (start == 0), крышки нет и всё за ней скрыто целиком.
-            let lid_band_top = if low {
-                // t выхода луча из клетки НИЗКОЙ МЕБЕЛИ (прилавка/бочки):
-                // ближайшая её дальняя граница. Координаты берём именно этой
-                // клетки — иначе на стыке клеток стены за прилавком (например
-                // двух клеток двери) кромка крышки скачет, и стык выглядит
-                // «изломом пространства».
-                let (lmx, lmy) = first_cell.unwrap_or((map_x, map_y));
+
+            // Геометрия каждого полублока: фасад и верхняя кромка.
+            for l in lows.iter_mut() {
+                let frac = low_frac(l.tile);
+                let full_h = SCREEN_H as f32 / l.perp.max(0.2);
+                let end_raw = HORIZON as f32 + full_h * 0.5;
+                let start_raw = end_raw - full_h * frac;
+                l.end = (end_raw as i32).min(SCREEN_H as i32);
+                l.start = start_raw.max(0.0).min(SCREEN_H as f32) as i32;
+                // Выход луча из ЭТОЙ клетки — дальняя кромка крышки.
                 let fx = if rdx.abs() < 1e-6 {
                     f32::MAX
                 } else if rdx > 0.0 {
-                    (lmx as f32 + 1.0 - cam.x) / rdx
+                    (l.cx as f32 + 1.0 - cam.x) / rdx
                 } else {
-                    (lmx as f32 - cam.x) / rdx
+                    (l.cx as f32 - cam.x) / rdx
                 };
                 let fy = if rdy.abs() < 1e-6 {
                     f32::MAX
                 } else if rdy > 0.0 {
-                    (lmy as f32 + 1.0 - cam.y) / rdy
+                    (l.cy as f32 + 1.0 - cam.y) / rdy
                 } else {
-                    (lmy as f32 - cam.y) / rdy
+                    (l.cy as f32 - cam.y) / rdy
                 };
-                let perp_exit = fx.min(fy).max(perp + 0.05);
-                let full2 = SCREEN_H as f32 / perp_exit.max(0.2);
-                let y_back = (HORIZON as f32 + full2 * (0.5 - frac)) as i32;
-                if start > 0 {
-                    y_back.max(0).min(start)
+                let exit = fx.min(fy).max(l.perp + 0.01);
+                let full2 = SCREEN_H as f32 / exit.max(0.2);
+                let y_back = HORIZON as f32 + full2 * (0.5 - frac);
+                l.lid_top = if start_raw > 0.0 {
+                    y_back.max(0.0).min(start_raw) as i32
                 } else {
                     0
-                }
-            } else {
-                SCREEN_H as i32
-            };
-            self.zlow[x] = if low { perp } else { f32::MAX };
-            self.zlow_top[x] = lid_band_top;
-            let wall_x = if side == 0 {
-                cam.y + perp * rdy
-            } else {
-                cam.x + perp * rdx
-            };
-            let wall_x = wall_x - wall_x.floor();
-            let mut tex_x = (wall_x * TEX_SIZE as f32) as usize % TEX_SIZE;
-            if (side == 0 && rdx > 0.0) || (side == 1 && rdy < 0.0) {
-                tex_x = TEX_SIZE - tex_x - 1;
-            }
-            let base_tex = hit_tile.tex().unwrap_or(TexId::TileWall);
-            let dark = if side == 1 { 0.8 } else { 1.0 };
-            let ex = (x as f32 - SCREEN_W as f32 / 2.0).abs() / (SCREEN_W as f32 / 2.0);
-            for y in start..end {
-                let tex_y = (((y - start_raw) as f32 * TEX_SIZE as f32 / wall_h.max(1) as f32)
-                    as usize)
-                    .min(TEX_SIZE - 1);
-                // верх кафельной стены — штукатурка с баннером
-                let c = if base_tex == TexId::TileWall && tex_y < 22 {
-                    tex.texel(TexId::PlasterBanner, tex_x, tex_y)
-                } else {
-                    tex.texel(base_tex, tex_x, tex_y)
                 };
-                let mut bright = (1.0 - perp / MAX_DIST).max(0.15) * flicker * dark;
-                if y & 1 == 1 {
-                    bright *= 0.75;
-                }
-                let ey = (y as f32 - SCREEN_H as f32 / 2.0).abs() / (SCREEN_H as f32 / 2.0);
-                bright *= 1.0 - 0.25 * ex * ey;
-                let band = light_band(bright, BAYER4[(x & 3) as usize][(y & 3) as usize]);
-                idx[y as usize * SCREEN_W + x] = self.colormap[c as usize][band];
             }
-            // над прилавком/бочкой/мусоркой — дальняя стена (иначе виден
-            // только потолок)
-            if low && start > 0 {
-                if let Some((t2, side2, perp2)) = second {
-                    let full2 = (SCREEN_H as f32 / perp2.max(0.2)) as i32;
-                    let end2_raw = HORIZON + full2 / 2;
-                    let start2_raw = end2_raw - full2;
-                    let end2 = end2_raw.min(SCREEN_H as i32);
-                    let start2 = start2_raw.max(0);
-                    let dark2 = if side2 == 1 { 0.8 } else { 1.0 };
-                    let tex2 = t2.tex().unwrap_or(TexId::TileWall);
-                    let wall_x2 = if side2 == 0 {
-                        cam.y + perp2 * rdy
+
+            let nearest = lows.first().copied();
+            self.zbuf[x] = wall.map(|w| w.2).unwrap_or(f32::MAX);
+            self.zlow[x] = nearest.map(|l| l.perp).unwrap_or(f32::MAX);
+            self.zlow_top[x] = nearest.map(|l| l.lid_top).unwrap_or(SCREEN_H as i32);
+            for l in &lows {
+                self.zlow_hits[x].push((l.perp, l.lid_top));
+            }
+
+            if wall.is_none() && lows.is_empty() {
+                continue;
+            }
+
+            // --- Дальняя настоящая стена: фон для полублоков ---
+            if let Some((t, side, perp)) = wall {
+                let full_h = SCREEN_H as f32 / perp.max(0.2);
+                let end_raw = HORIZON as f32 + full_h * 0.5;
+                let end = (end_raw as i32).min(SCREEN_H as i32);
+                let start = (end_raw - full_h).max(0.0).min(SCREEN_H as f32) as i32;
+                let wall_x = if side == 0 {
+                    cam.y + perp * rdy
+                } else {
+                    cam.x + perp * rdx
+                };
+                let wall_x = wall_x - wall_x.floor();
+                let mut tex_x = (wall_x * TEX_SIZE as f32) as usize % TEX_SIZE;
+                if (side == 0 && rdx > 0.0) || (side == 1 && rdy < 0.0) {
+                    tex_x = TEX_SIZE - tex_x - 1;
+                }
+                let base_tex = t.tex().unwrap_or(TexId::TileWall);
+                let dark = if side == 1 { 0.8 } else { 1.0 };
+                let ex = (x as f32 - SCREEN_W as f32 / 2.0).abs() / (SCREEN_W as f32 / 2.0);
+                for y in start..end {
+                    let tex_y = (((y as f32 - (end_raw - full_h)) * TEX_SIZE as f32
+                        / full_h.max(1.0)) as usize)
+                        .min(TEX_SIZE - 1);
+                    let c = if base_tex == TexId::TileWall && tex_y < 22 {
+                        tex.texel(TexId::PlasterBanner, tex_x, tex_y)
                     } else {
-                        cam.x + perp2 * rdx
+                        tex.texel(base_tex, tex_x, tex_y)
                     };
-                    let wall_x2 = wall_x2 - wall_x2.floor();
-                    let mut tx2 = (wall_x2 * TEX_SIZE as f32) as usize % TEX_SIZE;
-                    if (side2 == 0 && rdx > 0.0) || (side2 == 1 && rdy < 0.0) {
-                        tx2 = TEX_SIZE - tx2 - 1;
+                    let mut bright = (1.0 - perp / MAX_DIST).max(0.15) * flicker * dark;
+                    if y & 1 == 1 {
+                        bright *= 0.75;
                     }
-                    // Только реальная высота дальней стены: ниже её основания
-                    // (end2) должен быть пол из flat-кастера, а не растянутая
-                    // нижняя строка текстуры. Иначе за прилавком появлялась
-                    // «порванная» полоса, которая ломалась на стыках клеток.
-                    for y in start2..start.min(end2) {
-                        let tex_y =
-                            (((y - start2_raw) as f32 * TEX_SIZE as f32 / full2.max(1) as f32)
-                                as usize)
-                                .min(TEX_SIZE - 1);
-                        let c = if tex2 == TexId::TileWall && tex_y < 22 {
-                            tex.texel(TexId::PlasterBanner, tx2, tex_y)
-                        } else {
-                            tex.texel(tex2, tx2, tex_y)
-                        };
-                        let mut bright = (1.0 - perp2 / MAX_DIST).max(0.15) * flicker * dark2;
-                        if y & 1 == 1 {
-                            bright *= 0.75;
+                    let ey = (y as f32 - SCREEN_H as f32 / 2.0).abs() / (SCREEN_H as f32 / 2.0);
+                    bright *= 1.0 - 0.25 * ex * ey;
+                    let band = light_band(bright, BAYER4[(x & 3) as usize][(y & 3) as usize]);
+                    idx[y as usize * SCREEN_W + x] = self.colormap[c as usize][band];
+                }
+            }
+
+            // --- Полублоки: дальние сначала, ближние поверх ---
+            for l in lows.iter().rev() {
+                let frac = low_frac(l.tile);
+                let perp = l.perp;
+                let full_h = SCREEN_H as f32 / perp.max(0.2);
+                let end_raw = HORIZON as f32 + full_h * 0.5;
+                let start_raw = end_raw - full_h * frac;
+                let end = l.end;
+                let start = l.start;
+                if end <= start {
+                    continue;
+                }
+                let wall_x = if l.side == 0 {
+                    cam.y + perp * rdy
+                } else {
+                    cam.x + perp * rdx
+                };
+                let wall_x = wall_x - wall_x.floor();
+                let mut tex_x = (wall_x * TEX_SIZE as f32) as usize % TEX_SIZE;
+                if (l.side == 0 && rdx > 0.0) || (l.side == 1 && rdy < 0.0) {
+                    tex_x = TEX_SIZE - tex_x - 1;
+                }
+                let base_tex = l.tile.tex().unwrap_or(TexId::TileWall);
+                let dark = if l.side == 1 { 0.8 } else { 1.0 };
+                let ex = (x as f32 - SCREEN_W as f32 / 2.0).abs() / (SCREEN_W as f32 / 2.0);
+                // фасад
+                for y in start..end {
+                    let tex_y = (((y as f32 - start_raw) * TEX_SIZE as f32
+                        / (full_h * frac).max(1.0)) as usize)
+                        .min(TEX_SIZE - 1);
+                    let c = tex.texel(base_tex, tex_x, tex_y);
+                    let mut bright = (1.0 - perp / MAX_DIST).max(0.15) * flicker * dark;
+                    if y & 1 == 1 {
+                        bright *= 0.75;
+                    }
+                    let ey = (y as f32 - SCREEN_H as f32 / 2.0).abs() / (SCREEN_H as f32 / 2.0);
+                    bright *= 1.0 - 0.25 * ex * ey;
+                    let band = light_band(bright, BAYER4[(x & 3) as usize][(y & 3) as usize]);
+                    idx[y as usize * SCREEN_W + x] = self.colormap[c as usize][band];
+                }
+                // Крышка — настоящая горизонтальная плоскость на высоте frac:
+                // сэмплим текстуру по мировым координатам, поэтому соседние
+                // клетки ряда дают непрерывную столешницу без швов.
+                if l.lid_top < start {
+                    let top = l.tile.top_tex().unwrap_or(base_tex);
+                    for y in l.lid_top..start {
+                        let dy = y - HORIZON;
+                        if dy <= 0 {
+                            continue;
                         }
-                        let ey = (y as f32 - SCREEN_H as f32 / 2.0).abs() / (SCREEN_H as f32 / 2.0);
-                        bright *= 1.0 - 0.25 * ex * ey;
-                        let band = light_band(bright, BAYER4[(x & 3) as usize][(y & 3) as usize]);
+                        let d = (0.5 - frac) * SCREEN_H as f32 / dy as f32;
+                        let wx = cam.x + rdx * d;
+                        let wy = cam.y + rdy * d;
+                        let tx = ((wx * TEX_SIZE as f32) as i32)
+                            .rem_euclid(TEX_SIZE as i32) as usize;
+                        let ty = ((wy * TEX_SIZE as f32) as i32)
+                            .rem_euclid(TEX_SIZE as i32) as usize;
+                        let c = tex.texel(top, tx, ty);
+                        let mut bright = (1.0 - d / MAX_DIST).max(0.2) * flicker * 1.1;
+                        if y & 1 == 1 {
+                            bright *= 0.8;
+                        }
+                        let band = light_band(
+                            bright.min(1.35),
+                            BAYER4[(x & 3) as usize][(y & 3) as usize],
+                        );
                         idx[y as usize * SCREEN_W + x] = self.colormap[c as usize][band];
                     }
-                }
-            }
-            // Перспективная крышка низкой мебели (ТЗ №6): верхняя грань
-            // прилавка/бочки/мусорки — от кромки фронта до задней кромки
-            // тайла. Покупатель за низкой мебелью считается низкой
-            // мебелью (zlow_top), крышка рисуется поверх дальних стен
-            // (честное перекрытие).
-            if low && start > 0 {
-                // геометрия (perp_exit/край крышки) посчитана до отрисовки
-                // фронта — она же задаёт линию обрезки спрайтов (zlow_top)
-                let band_top = lid_band_top;
-                let span = (start_raw - band_top).max(1);
-                // Крышка — своя текстура «вид сверху». Фасадную брать нельзя:
-                // её рисунок (касса, ленты) растягивался в мутные полосы.
-                let top = hit_tile.top_tex().unwrap_or(base_tex);
-                for y in band_top..start {
-                    let ty2 = (((y - band_top) as f32 * TEX_SIZE as f32 / span as f32) as usize)
-                        .min(TEX_SIZE - 1);
-                    let c = tex.texel(top, tex_x, ty2);
-                    let mut bright = (1.0 - perp / MAX_DIST).max(0.25) * flicker * dark * 1.12;
-                    if y & 1 == 1 {
-                        bright *= 0.8;
-                    }
-                    let band =
-                        light_band(bright.min(1.35), BAYER4[(x & 3) as usize][(y & 3) as usize]);
-                    idx[y as usize * SCREEN_W + x] = self.colormap[c as usize][band];
                 }
             }
         }
@@ -507,13 +499,22 @@ impl Renderer {
                 // обрезается ровно по её крыше (за прилавком видно только
                 // то, что выше его), а сам фасад «прострелить» нельзя.
                 let xi = x as usize;
-                let clip = if self.zbuf[xi] < ty {
+                // Полная стена ближе спрайта — колонка закрыта целиком.
+                let mut clip = if self.zbuf[xi] < ty {
                     0
-                } else if self.zlow[xi] < ty {
-                    self.zlow_top[xi]
                 } else {
                     SCREEN_H as i32
                 };
+                // Низкие блоки перед спрайтом: режем по САМОЙ ВЫСОКОЙ
+                // кромке (самый дальний блок ряда), иначе спрайт
+                // «простреливает» дальние крышки.
+                if clip > 0 {
+                    for (lp, lt) in &self.zlow_hits[xi] {
+                        if *lp < ty {
+                            clip = clip.min(*lt);
+                        }
+                    }
+                }
                 let tex_x = ((x - x_left) * crate::sprites::SPR_W as i32
                     / sprite_w.max(1) as i32)
                     .clamp(0, crate::sprites::SPR_W as i32 - 1) as usize;

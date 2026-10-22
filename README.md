@@ -5,6 +5,25 @@ Soviet kvass shop — Doom-style рейкастер на Rust + Bevy. Vyatka Owl
 Пиксель-арт 640×400, собственная CPU-рейкастерная отрисовка (DDA по Лодеву),
 палитра на 24 цвета, Doom-colormap, дизеринг Байера. Кириллический интерфейс.
 
+## Скриншоты
+
+| Торговый зал | Склад |
+|---|---|
+| ![Торговый зал](docs/screenshots/hall.png) | ![Склад](docs/screenshots/storage.png) |
+
+| Главное меню | Итоги дня |
+|---|---|
+| ![Главное меню](docs/screenshots/menu.png) | ![Итоги дня](docs/screenshots/dayend.png) |
+
+Прилавок — ряд честных полублоков: у каждого тайла свой фасад и столешница,
+без «невидимых кубов» и исчезающих касс:
+
+![Прилавок](docs/screenshots/counter.png)
+
+Обучение встроено в первый день: шаги, цели и подсказки.
+
+![Обучение](docs/screenshots/tutorial.png)
+
 ---
 
 ## Сборка бинарника
@@ -56,7 +75,7 @@ sudo apt install -y build-essential pkg-config libx11-dev libxcursor-dev \
 ### Linux — релизная сборка
 
 ```bash
-cd kvass-shop
+cd kvass
 cargo build --release
 ```
 
@@ -71,6 +90,13 @@ cargo build --release
 
 ### Windows
 
+Готовый exe — в [Releases](https://github.com/dodry-question/kvass/releases/latest).
+Он **самодостаточен**: музыка, SFX, шрифты, фон и иконка уже внутри, папка
+`assets` для запуска не нужна.
+
+Сборка из исходников (папка `assets` нужна только на этапе компиляции — всё
+вшивается в exe):
+
 ```powershell
 cargo build --release
 .\target\release\kvass-shop.exe
@@ -81,8 +107,8 @@ cargo build --release
 1. Создайте бутылку (тип **Gaming**) и поставьте в ней зависимости
    **DXVK** и **VKD3D** (в настройках бутылки). Это обязательно: Bevy
    рисует через Direct3D 12, который в Wine идёт через vkd3d → Vulkan.
-2. Положите `kvass-shop.exe` рядом с папкой `assets/` (например в
-   `drive_c/kvass-shop/` внутри бутылки) — игра ищет `assets` рядом с exe.
+2. Положите `kvass-shop.exe` в бутылку (например, в `drive_c/kvass-shop/`).
+   Папка `assets` не нужна — все ресурсы вшиты в exe.
 3. В Bottles: «Запустить EXE» / «Добавить ярлык» → выберите `kvass-shop.exe`.
 4. Если чёрный экран или окно не появляется — запустите exe с аргументом
    `--windowed` (в Bottles: поле «Аргументы» у ярлыка): игра откроется
@@ -95,15 +121,14 @@ cargo build --release
 
 ### Пакетирование для раздачи (Linux)
 
-Игра ищет каталог `assets` рядом с исполняемым файлом, затем в текущей
-папке. Поэтому достаточно положить бинарник рядом с `assets/`:
+Бинарник самодостаточен: музыка, SFX, шрифты и фон вшиты, папка `assets`
+для запуска не нужна. Достаточно одного файла:
 
 ```bash
 cargo build --release
 mkdir -p dist
 cp target/release/kvass-shop dist/
-cp -r assets dist/
-tar -C dist -czf kvass-shop-linux.tar.gz .
+tar -C dist -czf kvass-shop-linux.tar.gz kvass-shop
 ```
 
 Раздаёте `kvass-shop-linux.tar.gz` — распаковал, запустил `./kvass-shop`.
@@ -166,16 +191,18 @@ cargo run --release -- --selftest
 | Кадр | Что проверяет |
 |---|---|
 | `1_menu` | главное меню, титул, киоск |
-| `2_shopping` | экран закупки |
-| `3_playing` | игровой день: мир + HUD + диалоги |
-| `4_dayend`, `5_final` | итоги дня, финал |
-| `6_font` | все глифы, включая кириллицу |
-| `7_tutorial` | панель обучения + маркер |
-| `8_npcs` | образы NPC |
-| `9_spriteonly` | мир + люди **без HUD** — видимость людей |
-| `10_close` | камера вплотную к прилавку |
-| `11_wallclose` | камера вплотную к стене |
-| `12_qte` | полоска ускорения брожения |
+| `2_supply` | окно снабжения |
+| `4_playing` | игровой день: мир + HUD + диалоги |
+| `5_dayend`, `6_final` | итоги дня, финал |
+| `7_font` | все глифы, включая кириллицу |
+| `8_tutorial` | панель обучения + маркер |
+| `9_npcs` | образы NPC |
+| `10_spriteonly` | мир **без HUD** — видимость людей |
+| `11_close` | камера вплотную к прилавку |
+| `12_wallclose` | камера вплотную к стене |
+| `13_counter_row` | ряд прилавков под острым углом |
+| `23c_spawn_view` | вид со стартовой точки |
+| `23d_storage` | склад: сухари, сахар, вода |
 
 BMP → PNG:
 

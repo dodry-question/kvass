@@ -347,15 +347,39 @@ pub struct SoundBank {
     pub ambience_on: bool,
 }
 
-pub fn load_bank(
-    mut commands: Commands,
-    server: Res<AssetServer>,
-    mut assets: ResMut<Assets<AudioSource>>,
-) {
-    generate_files();
+/// Все SFX встроены в exe: релизный бинарник работает без папки assets.
+fn sfx_bytes(name: &str) -> &'static [u8] {
+    match name {
+        "pour" => include_bytes!("../assets/sounds/pour.wav"),
+        "croutons" => include_bytes!("../assets/sounds/croutons.wav"),
+        "water" => include_bytes!("../assets/sounds/water.wav"),
+        "hiss" => include_bytes!("../assets/sounds/hiss.wav"),
+        "ding" => include_bytes!("../assets/sounds/ding.wav"),
+        "hiss2" => include_bytes!("../assets/sounds/hiss2.wav"),
+        "fooff" => include_bytes!("../assets/sounds/fooff.wav"),
+        "coin" => include_bytes!("../assets/sounds/coin.wav"),
+        "step1" => include_bytes!("../assets/sounds/step1.wav"),
+        "step2" => include_bytes!("../assets/sounds/step2.wav"),
+        "door" => include_bytes!("../assets/sounds/door.wav"),
+        "whistle" => include_bytes!("../assets/sounds/whistle.wav"),
+        "pop" => include_bytes!("../assets/sounds/pop.wav"),
+        "bubble_loop" => include_bytes!("../assets/sounds/bubble_loop.wav"),
+        "street_loop" => include_bytes!("../assets/sounds/street_loop.wav"),
+        "alarm" => include_bytes!("../assets/sounds/alarm.wav"),
+        _ => &[],
+    }
+}
+
+pub fn load_bank(mut commands: Commands, mut assets: ResMut<Assets<AudioSource>>) {
     let mut handles = HashMap::new();
     for name in SOUNDS {
-        let h: Handle<AudioSource> = server.load(format!("sounds/{name}.wav"));
+        let bytes = sfx_bytes(name);
+        if bytes.is_empty() {
+            continue;
+        }
+        let h = assets.add(AudioSource {
+            bytes: Arc::from(bytes),
+        });
         handles.insert(name.to_string(), h);
     }
     // Музыка меню — не через AssetServer (не нужен файл на диске):

@@ -672,7 +672,19 @@ pub fn run() {
     renderer.present();
     write_bmp_world(&out.join("12_wallclose.bmp"), &renderer.rgba);
 
-    // --- 13. Полоска ускорения брожения (мини-игра на ПРОБЕЛЕ) ---
+    // --- 13. Ряд прилавков под острым углом: луч проходит несколько
+    //         клеток подряд, все они должны быть видны (регрессия
+    //         «невидимого куба» и исчезающих касс). ---
+    let counter_cam = GameCam {
+        x: 2.5,
+        y: 3.5,
+        angle: 0.245,
+    };
+    renderer.render(&map, &textures, &counter_cam, 1.0);
+    renderer.present();
+    write_bmp_world(&out.join("13_counter_row.bmp"), &renderer.rgba);
+
+    // --- 14. Полоска ускорения брожения (мини-игра на ПРОБЕЛЕ) ---
     let qte = BrewQte {
         active: true,
         pos: 0.48,
@@ -1176,10 +1188,38 @@ pub fn run() {
     );
     snap(&canvas, Some(&world_spawn), "23c_spawn_view.bmp");
 
+    // --- 23d. Склад: сухари на северной стене, сахар на южной, вода справа ---
+    let storage_cam = GameCam {
+        x: 14.3,
+        y: 7.7,
+        angle: -0.65,
+    };
+    renderer.render(&map, &textures, &storage_cam, 1.0);
+    renderer.present();
+    let world_storage = renderer.rgba.clone();
+    canvas.clear();
+    ui::draw_frame(
+        &mut canvas,
+        &font,
+        &after_intro,
+        &inv,
+        &barrels,
+        &no_qte,
+        &no_cool,
+        &no_cust,
+        3.4,
+        &storage_cam,
+        &map,
+        false,
+        &no_modal,
+        &no_props,
+    );
+    snap(&canvas, Some(&world_storage), "23d_storage.bmp");
+
     // --- 24. Логика начала дня: телепорт на спавн + заставка «ДЕНЬ N» ---
     assert_eq!(crate::tutorial::TUT_STEPS.len(), 10, "в обучении 10 шагов");
-    assert_eq!(crate::tutorial::TUT_STEPS[8].target, (1.5, 4.5), "шаг 9 — мойка");
-    assert_eq!(crate::tutorial::TUT_STEPS[9].target, (2.5, 6.5), "шаг 10 — мусорка");
+    assert_eq!(crate::tutorial::TUT_STEPS[8].target, (8.5, 5.5), "шаг 9 — мойка");
+    assert_eq!(crate::tutorial::TUT_STEPS[9].target, (5.5, 8.3), "шаг 10 — мусорка");
     let mut st = GameState::default();
     let mut day_barrels = Barrels::from_map(&map);
     let mut day_dirty = crate::day_cycle::Dirty::default();

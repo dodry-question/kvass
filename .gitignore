@@ -2,3 +2,4 @@
 /selftest_out
 *.bak
 *.log
+/dist/*.exe
