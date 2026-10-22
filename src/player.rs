@@ -61,12 +61,17 @@ pub fn movement(
 }
 
 fn blocked(map: &Map, x: f32, y: f32) -> bool {
-    // Касса (9,3): не подходим ближе 0.6 ни с юга, ни с запада (ТЗ №6/7)
-    if (9.0..10.0).contains(&x) && y >= 4.0 && y < 4.0 + COUNTER_STANDOFF {
-        return true;
-    }
-    if x >= 9.0 - COUNTER_STANDOFF && x < 9.0 && (3.0..4.0).contains(&y) {
-        return true;
+    // ТЗ №7: не подходим ближе COUNTER_STANDOFF к прилавку с любой стороны —
+    // иначе камера «заглядывает» в низкую мебель и видит сквозь фасад.
+    for (px, py) in [
+        (x + COUNTER_STANDOFF, y),
+        (x - COUNTER_STANDOFF, y),
+        (x, y + COUNTER_STANDOFF),
+        (x, y - COUNTER_STANDOFF),
+    ] {
+        if map.get(px.floor() as i32, py.floor() as i32) == crate::map::Tile::Counter {
+            return true;
+        }
     }
     for (ox, oy) in [(-RADIUS, -RADIUS), (RADIUS, -RADIUS), (-RADIUS, RADIUS), (RADIUS, RADIUS)] {
         if map.get((x + ox).floor() as i32, (y + oy).floor() as i32).solid() {

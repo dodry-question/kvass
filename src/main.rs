@@ -87,7 +87,7 @@ fn window_setup() -> Window {
 }
 
 /// Идентификатор сборки — выводится в HUD для проверки версии exe (ТЗ).
-pub const BUILD_ID: &str = "BUILD 2026-10-22.27 TUTORIAL-DAY";
+pub const BUILD_ID: &str = "BUILD 2026-10-22.28 MAP-MUSIC";
 
 pub fn assets_root() -> std::path::PathBuf {
     let mut bases: Vec<std::path::PathBuf> = Vec::new();
@@ -295,11 +295,11 @@ fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
     ));
 
     // ТЗ №5: мусорка — статичный билборд-спрайт (а не тайл-стена), стоит
-    // в уголке у южной стены правее мойки — не перекрывает обзор и проход.
+    // у южной стены зала, между «заказами» и стеллажом посуды.
     // Логика E — в interact::interact по близости.
     commands.spawn(sprites::WorldProp {
         kind: sprites::PropKind::TrashBin,
-        pos: Vec2::new(2.5, 6.5),
+        pos: Vec2::new(5.5, 8.3),
     });
 
     // Канвас UI 1280×800 (2× буфер мира) — прозрачный слой поверх мира.
@@ -332,7 +332,7 @@ fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
     commands.insert_resource(Canvas::new());
     commands.spawn(Camera2d);
 
-    // Старт игрока — за прилавком, лицом к прилавку и очереди
+    // Старт игрока — за Г-прилавком, лицом к прилавку и колонне очереди
     commands.insert_resource(GameCam {
         x: day_cycle::SPAWN_X,
         y: day_cycle::SPAWN_Y,

@@ -202,10 +202,14 @@ pub fn hooligan_behavior(
             c.say(dialogues::hooligan_threat(rng).to_string());
         }
         if h.t > 15.0 {
-            // идёт за бочку (северный коридор, затем западный проход)
+            // идёт за бочку: обход прилавка с запада, затем вдоль южной стены
             h.going = true;
             c.state = CustState::Custom;
-            c.path = VecDeque::from([Vec2::new(2.5, 2.5), Vec2::new(2.5, 5.5)]);
+            c.path = VecDeque::from([
+                Vec2::new(3.5, 3.5),
+                Vec2::new(3.5, 7.5),
+                Vec2::new(6.5, 7.4),
+            ]);
             c.say("Всё, барин, сам виноват!".into());
         }
         let _ = &mut commands;
@@ -249,8 +253,9 @@ pub fn hooligan_behavior(
             // навсегда (Custom-состояние не двигается сам по себе).
             c.state = CustState::Leaving;
             c.path = VecDeque::from([
-                Vec2::new(2.5, 1.5),
-                Vec2::new(6.5, 1.5),
+                Vec2::new(3.5, 7.5),
+                Vec2::new(3.5, 1.5),
+                Vec2::new(5.5, 1.5),
                 crate::customer::DOOR,
             ]);
         }
