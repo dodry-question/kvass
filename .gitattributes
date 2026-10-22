@@ -1,0 +1,3 @@
+# Служебные Python-скрипты (crop.py, shot.py, tools/fix_font.py)
+# не участвуют в статистике языков GitHub: в репозитории остаётся 100% Rust.
+*.py linguist-vendored
