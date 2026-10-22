@@ -91,7 +91,7 @@ fn window_setup() -> Window {
 }
 
 /// Идентификатор сборки — выводится в HUD для проверки версии exe (ТЗ).
-pub const BUILD_ID: &str = "BUILD 2026-10-22.17 MENU-MUSIC";
+pub const BUILD_ID: &str = "BUILD 2026-10-22.18 GAME-MUSIC";
 
 pub fn assets_root() -> std::path::PathBuf {
     let mut bases: Vec<std::path::PathBuf> = Vec::new();
@@ -221,8 +221,9 @@ fn main() {
                 )
                     .chain(),
                 (
-                    // музыка меню — петля на всех экранах главного меню
-                    audio::menu_music,
+                    // музыка: меню/игра, петли + приглушение под эффекты
+                    audio::music,
+                    audio::music_volume,
                     audio::ambience,
                     audio::bubble_volume,
                     audio::footsteps,

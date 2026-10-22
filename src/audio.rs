@@ -7,7 +7,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use bevy::audio::AudioSink;
+use bevy::audio::{AudioSink, AudioSinkPlayback, GlobalVolume, Volume};
 use bevy::prelude::*;
 
 use crate::day_cycle::{GameState, Phase};
@@ -20,6 +20,10 @@ pub struct Sfx;
 /// Встроена прямо в exe: игра работает из любого каталога запуска
 /// и не зависит от папки assets на диске.
 pub const MENU_MUSIC: &[u8] = include_bytes!("../assets/music/menu_theme.flac");
+
+/// Музыка основного игрового дня (тема «Квасной лавки», FLAC, 20 с, петля).
+/// Тоже встроена в exe.
+pub const GAME_MUSIC: &[u8] = include_bytes!("../assets/music/game_theme.flac");
 
 pub const SOUNDS: &[&str] = &[
     "pour", "croutons", "water", "hiss", "ding", "hiss2", "fooff", "coin", "step1", "step2",
@@ -330,6 +334,8 @@ pub struct SoundBank {
     pub handles: HashMap<String, Handle<AudioSource>>,
     /// Встроенная музыка меню (FLAC в exe).
     pub music: Handle<AudioSource>,
+    /// Встроенная музыка игрового дня (FLAC в exe).
+    pub game_music: Handle<AudioSource>,
     pub step_toggle: bool,
     pub step_t: f32,
     pub last_customers: usize,
@@ -352,9 +358,14 @@ pub fn load_bank(
     let music = assets.add(AudioSource {
         bytes: Arc::from(MENU_MUSIC),
     });
+    let game_music = assets.add(AudioSource {
+        bytes: Arc::from(GAME_MUSIC),
+    });
+    commands.insert_resource(MusicDuck(1.0));
     commands.insert_resource(SoundBank {
         handles,
         music,
+        game_music,
         step_toggle: false,
         step_t: 0.0,
         last_customers: 0,
@@ -376,11 +387,13 @@ pub fn play_sfx(commands: &mut Commands, bank: &SoundBank, name: &str, volume: f
     }
 }
 
-/// Маркер петель-фонов.
+/// Маркеры петель-фонов (бурление бочки).
 #[derive(Component)]
 pub struct LoopMark(pub &'static str);
 
-/// Фон: улица и бурление бочки во время дня.
+/// Фон игры: только бурление бочки. Уличный шум убран — под музыку он
+/// читался как «какой-то шум»; логичные эффекты (касса, наливание,
+/// клиенты, тревога) остаются.
 pub fn ambience(
     mut commands: Commands,
     bank: Res<SoundBank>,
@@ -390,17 +403,6 @@ pub fn ambience(
 ) {
     let playing = state.phase == Phase::Playing;
     if playing && !*was_playing {
-        if let Some(h) = bank.handles.get("street_loop") {
-            commands.spawn((
-                AudioPlayer::new(h.clone()),
-                PlaybackSettings {
-                    mode: bevy::audio::PlaybackMode::Loop,
-                    volume: bevy::audio::Volume::Linear(0.35),
-                    ..default()
-                },
-                LoopMark("street"),
-            ));
-        }
         if let Some(h) = bank.handles.get("bubble_loop") {
             commands.spawn((
                 AudioPlayer::new(h.clone()),
@@ -421,39 +423,88 @@ pub fn ambience(
     *was_playing = playing;
 }
 
-/// Маркер музыки меню (одна петля).
-#[derive(Component)]
-pub struct MusicMark;
+/// Какой трек должен звучать в текущей фазе.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Track {
+    Menu,
+    Game,
+}
 
-/// Музыка главного меню: звучит на всех экранах меню (вход, настройки,
-/// рекомендация обучения) и гаснет, как только игрок уходит в игру.
-/// Громкость проходит через `GlobalVolume`, поэтому ползунок настроек
-/// действует и на музыку.
-pub fn menu_music(
+/// Маркер звучащей музыки: трек и базовая громкость.
+#[derive(Component)]
+pub struct MusicMark {
+    pub track: Track,
+    pub base: f32,
+}
+
+impl MusicMark {
+    fn new(track: Track) -> Self {
+        // Игровая тема намеренно тише меню: она фон, а не солист —
+        // эффекты (касса, наливание, клиенты) должны быть слышны.
+        let base = match track {
+            Track::Menu => 0.40,
+            Track::Game => 0.22,
+        };
+        Self { track, base }
+    }
+}
+
+/// Музыка: тема меню на экранах входа, тема игры — в дни/обучении/итогах.
+/// Оба трека зациклены (PlaybackMode::Loop) и меняются сами при смене фазы.
+pub fn music(
     mut commands: Commands,
     bank: Res<SoundBank>,
     state: Res<GameState>,
-    mut was_menu: Local<bool>,
-    players: Query<Entity, With<MusicMark>>,
+    players: Query<(Entity, &MusicMark)>,
 ) {
-    let menu = state.phase == Phase::Menu;
-    if menu && !*was_menu {
-        commands.spawn((
-            AudioPlayer::new(bank.music.clone()),
-            PlaybackSettings {
-                mode: bevy::audio::PlaybackMode::Loop,
-                volume: bevy::audio::Volume::Linear(0.45),
-                ..default()
-            },
-            MusicMark,
-        ));
+    let wanted = match state.phase {
+        Phase::Menu => Some(Track::Menu),
+        Phase::Tutorial | Phase::Playing | Phase::DayEnd | Phase::Paused => Some(Track::Game),
+        Phase::Final => None,
+    };
+    let current = players.iter().next().map(|(_, m)| m.track);
+    if current == wanted {
+        return;
     }
-    if !menu && *was_menu {
-        for e in &players {
-            commands.entity(e).despawn();
-        }
+    for (e, _) in &players {
+        commands.entity(e).despawn();
     }
-    *was_menu = menu;
+    let Some(track) = wanted else { return };
+    let h = match track {
+        Track::Menu => bank.music.clone(),
+        Track::Game => bank.game_music.clone(),
+    };
+    commands.spawn((
+        AudioPlayer::new(h),
+        PlaybackSettings {
+            mode: bevy::audio::PlaybackMode::Loop,
+            volume: bevy::audio::Volume::Linear(MusicMark::new(track).base),
+            ..default()
+        },
+        MusicMark::new(track),
+    ));
+}
+
+/// Текущий коэффициент приглушения музыки (1.0 — полная громкость).
+#[derive(Resource)]
+pub struct MusicDuck(pub f32);
+
+/// Мягко приглушает музыку, пока звучат эффекты, чтобы они не тонули,
+/// и применяет мастер-громкость из настроек к уже играющему треку.
+pub fn music_volume(
+    time: Res<Time>,
+    gvol: Res<GlobalVolume>,
+    mut duck: ResMut<MusicDuck>,
+    mut music: Query<(&MusicMark, &mut AudioSink)>,
+    sfx: Query<&AudioSink, (Without<MusicMark>, Without<LoopMark>)>,
+) {
+    let busy = sfx.iter().any(|s| !s.empty());
+    let target = if busy { 0.55 } else { 1.0 };
+    duck.0 += (target - duck.0) * (time.delta_secs() * 6.0).min(1.0);
+    let g = gvol.volume.to_linear();
+    for (mark, mut sink) in &mut music {
+        sink.set_volume(Volume::Linear(mark.base * duck.0 * g));
+    }
 }
 
 /// Громкость бурления — тише, когда игрок далеко от бочки.
