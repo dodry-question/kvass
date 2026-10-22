@@ -1,8 +1,10 @@
 //! Игровой день: фазы, норма денег, закупка сырья, спавн покупателей.
 
 use bevy::prelude::*;
+use bevy::window::{PrimaryWindow, Window};
 use rand::prelude::*;
 
+use crate::canvas::{CV_H, CV_W};
 use crate::customer::{spawn_customer, Customer, QUEUE_SPOTS};
 use crate::sprites::NpcKind;
 
@@ -22,17 +24,26 @@ pub const SPAWN_ANGLE: f32 = -std::f32::consts::FRAC_PI_2;
 /// с надписью, затем медленно проявляется лавка.
 pub const DAY_INTRO_SECS: f32 = 3.2;
 
+/// В игре ровно три дня. После итогов третьего дня — благодарность,
+/// а не четвёртый день.
+pub const MAX_DAY: u32 = 3;
+
+/// Кнопка «ОК» на экране благодарности (координаты канваса UI).
+pub const FINAL_OK: (i32, i32, i32, i32) = (CV_W / 2 - 150, 600, 300, 64);
+
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Phase {
     /// Главное меню.
     Menu,
     /// Обучение: без времени, один гость, подсказки с маркером.
     Tutorial,
+    /// Предыстория перед первым днём: окно с текстом, затем «ДЕНЬ 1».
+    Story,
     /// Игровой день.
     Playing,
     /// Итоги дня.
     DayEnd,
-    /// Финальная заставка.
+    /// Благодарность за игру после третьего дня; ОК — в главное меню.
     Final,
     /// Пауза (ESC): продолжить / в меню / выход.
     Paused,
@@ -85,6 +96,9 @@ pub struct GameState {
     /// Тревога (ТЗ №5): >0 — бандиты на подходе, экран пульсирует красным.
     /// Убывает в `day_system`, выставляется при спавне хулигана.
     pub alarm_t: f32,
+    /// «Подбитый глаз» после неудачной лжи бандиту: >0 — левая половина
+    /// экрана красная и мутная. Убывает в `day_system`, сбрасывается в новый день.
+    pub black_eye: f32,
     /// Экран меню (главное / настройки / рекомендация обучения).
     pub menu_view: MenuView,
     /// Выбранный пункт меню — индекс среди ВИДИМЫХ кнопок.
@@ -124,6 +138,7 @@ impl Default for GameState {
             face_t: 0.0,
             wash_bar: 0.0,
             alarm_t: 0.0,
+            black_eye: 0.0,
             menu_view: MenuView::Main,
             menu_sel: 0,
             menu_vol: 10,
@@ -173,11 +188,15 @@ pub fn start_day(
     dirty: &mut Dirty,
     cam: &mut crate::raycaster::GameCam,
 ) {
+    // Защита от четвёртого дня: даже если состояние как-то пришло с day > 3,
+    // игра остаётся в пределах трёхдневного сюжета.
+    state.day = state.day.clamp(1, MAX_DAY);
     state.phase = Phase::Playing;
     state.time_left = day_len(state.day);
     state.spawn_t = 10.0;
     state.fine = 0;
     state.fine_reason.clear();
+    state.black_eye = 0.0;
     // сброс мира: бочки и грязь (покупателей чистит вызывающий)
     for b in barrels.map.values_mut() {
         *b = crate::brewing::Barrel::new();
@@ -246,19 +265,29 @@ pub fn phase_system(
     customers: Query<Entity, With<Customer>>,
     mut dirty: ResMut<Dirty>,
     mut cam: ResMut<crate::raycaster::GameCam>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    windows: Query<&Window, With<PrimaryWindow>>,
 ) {
     match state.phase {
         Phase::Menu => {
             // Ввод меню (мышь + клавиатура) целиком в menu::menu_input:
             // ВХОД/ОБУЧЕНИЕ/НАСТРОЙКИ/ВЫХОД и окно рекомендации обучения.
         }
+        Phase::Story => {
+            // Подтверждение предыстории обрабатывает story::story_input.
+        }
         Phase::DayEnd => {
             let go = keys.just_pressed(KeyCode::Enter)
                 || keys.just_pressed(KeyCode::NumpadEnter)
                 || keys.just_pressed(KeyCode::Space);
             if go {
-                if state.day >= 4 {
+                if state.day >= MAX_DAY {
+                    // Третьи сутки — последние: вместо четвёртого дня
+                    // показываем благодарность за игру.
+                    clear_customers(&mut commands, &customers);
                     state.phase = Phase::Final;
+                    state.msg_t = 0.0;
+                    keys.clear(); // ТЗ №1
                     return;
                 }
                 // следующий день — сразу в игру (ТЗ №3: закупки нет)
@@ -274,10 +303,24 @@ pub fn phase_system(
             }
         }
         Phase::Final => {
-            if keys.just_pressed(KeyCode::Escape) {
+            // «ОК» можно нажать мышью или подтвердить Enter/Space/E.
+            let mut ok = keys.just_pressed(KeyCode::Enter)
+                || keys.just_pressed(KeyCode::NumpadEnter)
+                || keys.just_pressed(KeyCode::Space)
+                || keys.just_pressed(KeyCode::KeyE)
+                || keys.just_pressed(KeyCode::Escape);
+            if !ok && mouse.just_pressed(MouseButton::Left) {
+                if let Some((mx, my)) = cursor_canvas(&windows) {
+                    let (x, y, w, h) = FINAL_OK;
+                    ok = mx >= x && mx < x + w && my >= y && my < y + h;
+                }
+            }
+            if ok {
+                clear_customers(&mut commands, &customers);
                 state.phase = Phase::Menu;
                 state.menu_view = MenuView::Main;
                 state.menu_sel = 0;
+                state.msg_t = 0.0;
                 // игра пройдена — «продолжать» больше нечего
                 state.has_progress = false;
                 keys.clear(); // ТЗ №1
@@ -347,6 +390,20 @@ pub fn phase_system(
     }
 }
 
+/// Курсор в координатах канваса UI (область 4:3 по центру окна).
+fn cursor_canvas(windows: &Query<&Window, With<PrimaryWindow>>) -> Option<(i32, i32)> {
+    let w = windows.single().ok()?;
+    let p = w.cursor_position()?;
+    let (sx, sy, sw, sh) = crate::stage_43(w.resolution.width(), w.resolution.height());
+    if p.x < sx || p.y < sy || p.x >= sx + sw || p.y >= sy + sh {
+        return None;
+    }
+    Some((
+        ((p.x - sx) / sw * CV_W as f32) as i32,
+        ((p.y - sy) / sh * CV_H as f32) as i32,
+    ))
+}
+
 /// Возврат из паузы к игре/обучению.
 fn ok_pause_resume(state: &mut GameState) {
     state.phase = if state.pause_prev == PAUSE_FROM_TUTORIAL {
@@ -389,6 +446,10 @@ pub fn day_system(
     if state.alarm_t > 0.0 {
         state.alarm_t = (state.alarm_t - dt).max(0.0);
     }
+    // Подбитый глаз: красно-мутный эффект постепенно проходит.
+    if state.black_eye > 0.0 {
+        state.black_eye = (state.black_eye - dt).max(0.0);
+    }
     // Первый переброд: часы смены и поток покупателей стоят, пока игрок
     // не принесёт воду (или не вымоет бочку после провала).
     if overbrew.freeze() {
@@ -418,5 +479,78 @@ pub fn day_system(
         let mut rng = &mut game_rng.0;
         let _ = spawn_customer(&mut commands, &pool, &taken, &mut rng);
         state.spawn_t = state.spawn_interval + rng.random_range(-3.0..3.0);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::brewing::Barrels;
+    use crate::raycaster::GameCam;
+    use std::collections::HashMap;
+
+    #[test]
+    fn start_day_never_goes_past_third_day() {
+        let mut state = GameState {
+            day: 4,
+            ..Default::default()
+        };
+        let mut barrels = Barrels {
+            map: HashMap::new(),
+        };
+        let mut dirty = Dirty(0);
+        let mut cam = GameCam {
+            x: 0.0,
+            y: 0.0,
+            angle: 0.0,
+        };
+        start_day(&mut state, &mut barrels, &mut dirty, &mut cam);
+        assert_eq!(state.day, MAX_DAY);
+        assert_eq!(state.phase, Phase::Playing);
+    }
+
+    #[test]
+    fn third_day_ends_with_thanks_and_ok_returns_to_menu() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.insert_resource(GameState {
+            phase: Phase::DayEnd,
+            day: MAX_DAY,
+            ..Default::default()
+        });
+        app.insert_resource(ButtonInput::<KeyCode>::default());
+        app.insert_resource(ButtonInput::<MouseButton>::default());
+        app.insert_resource(Barrels {
+            map: HashMap::new(),
+        });
+        app.insert_resource(Dirty(0));
+        app.insert_resource(GameCam {
+            x: 0.0,
+            y: 0.0,
+            angle: 0.0,
+        });
+        app.add_systems(Update, phase_system);
+
+        // ENTER на итогах третьего дня ведёт в благодарность, не в день 4.
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Enter);
+        app.update();
+        let state = app.world().resource::<GameState>();
+        assert_eq!(state.phase, Phase::Final);
+        assert_eq!(state.day, MAX_DAY);
+
+        // ENTER/OK на экране благодарности возвращает в главное меню.
+        {
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.clear();
+            keys.release(KeyCode::Enter);
+            keys.press(KeyCode::Enter);
+        }
+        app.update();
+        let state = app.world().resource::<GameState>();
+        assert_eq!(state.phase, Phase::Menu);
+        assert_eq!(state.menu_view, MenuView::Main);
+        assert!(!state.has_progress);
     }
 }

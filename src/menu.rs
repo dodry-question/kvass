@@ -23,7 +23,7 @@ use bevy::window::{PrimaryWindow, Window};
 
 use crate::canvas::{CV_H, CV_W};
 use crate::day_cycle::{
-    give_start_package, start_day, GameState, MenuView, PAUSE_FROM_TUTORIAL, Phase,
+    give_start_package, GameState, MenuView, PAUSE_FROM_TUTORIAL, Phase,
 };
 
 // =================== Раскладка кнопок ===================
@@ -168,18 +168,15 @@ fn sfx(commands: &mut Commands, bank: &Option<Res<crate::audio::SoundBank>>, nam
     }
 }
 
-/// ВХОД: начать основной игровой цикл с первого дня.
-fn start_game(
-    state: &mut GameState,
-    inv: &mut crate::inventory::Inventory,
-    barrels: &mut crate::brewing::Barrels,
-    dirty: &mut crate::day_cycle::Dirty,
-    cam: &mut crate::raycaster::GameCam,
-) {
-    give_start_package(state, inv);
-    start_day(state, barrels, dirty, cam);
+/// ВХОД: показать предысторию. `story::story_input` после подтверждения
+/// вызовет `start_day` и включит чёрную заставку «ДЕНЬ 1».
+fn start_game(state: &mut GameState) {
+    // Стартовый пакет выдаётся после подтверждения предыстории, чтобы
+    // случайный выход из неё не сбрасывал уже начатую игру.
+    state.phase = Phase::Story;
     state.menu_view = MenuView::Main;
     state.menu_sel = 0;
+    state.msg_t = 0.0;
 }
 
 /// Обучение из меню: всегда без пропуска (T); `after_game` — после обучения
@@ -204,9 +201,6 @@ pub fn menu_input(
     time: Res<Time>,
     mut state: ResMut<GameState>,
     mut inv: ResMut<crate::inventory::Inventory>,
-    mut barrels: ResMut<crate::brewing::Barrels>,
-    mut dirty: ResMut<crate::day_cycle::Dirty>,
-    mut cam: ResMut<crate::raycaster::GameCam>,
     mut gvol: ResMut<GlobalVolume>,
     mut keys: ResMut<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
@@ -273,7 +267,7 @@ pub fn menu_input(
                     }
                     Btn::Enter => {
                         if state.tut_done {
-                            start_game(&mut state, &mut inv, &mut barrels, &mut dirty, &mut cam);
+                            start_game(&mut state);
                         } else {
                             // в начале игры — окно с рекомендацией пройти обучение
                             state.menu_view = MenuView::Advice;
@@ -335,7 +329,7 @@ pub fn menu_input(
                 if state.menu_sel == 0 {
                     start_tutorial(&mut state, &mut inv, true);
                 } else {
-                    start_game(&mut state, &mut inv, &mut barrels, &mut dirty, &mut cam);
+                    start_game(&mut state);
                 }
             }
         }

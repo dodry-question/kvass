@@ -6,11 +6,13 @@
 // шрифта). Для --selftest/--dump-sprites консоль возвращается в main().
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod ambush;
 mod audio;
 mod brewing;
 mod canvas;
 mod customer;
 mod day_cycle;
+mod debug;
 mod dialogues;
 mod enemies;
 mod font;
@@ -25,6 +27,7 @@ mod raycaster;
 mod dump;
 mod selftest;
 mod sprites;
+mod story;
 mod textures;
 mod tutorial;
 mod ui;
@@ -36,9 +39,11 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::window::{CursorGrabMode, CursorOptions, MonitorSelection, PrimaryWindow, WindowMode};
 use rand::prelude::*;
 
+use ambush::BanditAmbush;
 use canvas::{CV_H, CV_W, Canvas};
 use brewing::Barrels;
 use customer::Customer;
+use debug::DebugConsole;
 use day_cycle::{GameState, GameRng, Phase};
 use font::Font;
 use inventory::Inventory;
@@ -87,7 +92,7 @@ fn window_setup() -> Window {
 }
 
 /// Идентификатор сборки — выводится в HUD для проверки версии exe (ТЗ).
-pub const BUILD_ID: &str = "BUILD 2: ПЕРВЫЙ ПЕРЕБРОД";
+pub const BUILD_ID: &str = "BUILD 3: БАНДИТ, ПРЕДЫСТОРИЯ И ФИНАЛ";
 
 pub fn assets_root() -> std::path::PathBuf {
     let mut bases: Vec<std::path::PathBuf> = Vec::new();
@@ -192,6 +197,17 @@ fn main() {
         .add_systems(
             Update,
             (
+                // --- Отладка: первым делом, чтобы ввод не протекал в игру ---
+                (
+                    debug::toggle_console,
+                    debug::input_console,
+                    debug::execute_console,
+                )
+                    .chain(),
+                // --- Сцена бандита: детект перехода и варианты ответа ---
+                (ambush::ambush_system, ambush::ambush_input)
+                    .chain()
+                    .run_if(debug_closed),
                 (
                     // ТЗ №5 «время не стоит на месте»: в модалках (мойка,
                     // снабжение, выбор тары) мир продолжает жить — гейтится
@@ -205,26 +221,62 @@ fn main() {
                         .run_if(in_world)
                         .run_if(modal_closed)
                         .run_if(day_intro_done),
-                    grab_cursor,
                     slot_select.run_if(modal_closed),
                     menu::menu_input,
                     day_cycle::phase_system.run_if(modal_closed),
-                    day_cycle::day_system,
-                    tutorial::tutorial_system.run_if(modal_closed),
-                    brewing::barrel_update.run_if(in_world),
-                    brewing::brew_hints.run_if(in_world).run_if(modal_closed),
-                    customer::customer_update.run_if(in_world).run_if(no_overbrew_freeze),
-                    enemies::enemies_spawn.run_if(no_overbrew_freeze),
-                    enemies::officials_fine.run_if(in_play).run_if(no_overbrew_freeze),
-                    enemies::hooligan_spawn.run_if(in_play).run_if(no_overbrew_freeze),
-                    enemies::hooligan_behavior.run_if(in_play).run_if(no_overbrew_freeze),
-                    interact::interact.run_if(modal_closed),
-                    interact::fill_hold.run_if(modal_closed),
-                    brewing::first_overbrew_event.run_if(in_play),
-                    interact::brew_qte.run_if(modal_closed),
-                    interact::cool_qte.run_if(modal_closed),
+                    day_cycle::day_system.run_if(debug_clock_running),
+                    tutorial::tutorial_system
+                        .run_if(modal_closed)
+                        .run_if(debug_clock_running),
+                    brewing::barrel_update
+                        .run_if(in_world)
+                        .run_if(debug_clock_running),
+                    brewing::brew_hints
+                        .run_if(in_world)
+                        .run_if(modal_closed)
+                        .run_if(debug_clock_running),
+                    customer::customer_update
+                        .run_if(in_world)
+                        .run_if(no_overbrew_freeze)
+                        .run_if(debug_clock_running),
+                    enemies::enemies_spawn
+                        .run_if(no_overbrew_freeze)
+                        .run_if(debug_clock_running),
+                    enemies::officials_fine
+                        .run_if(in_play)
+                        .run_if(no_overbrew_freeze)
+                        .run_if(debug_clock_running),
+                    enemies::hooligan_spawn
+                        .run_if(in_play)
+                        .run_if(no_overbrew_freeze)
+                        .run_if(debug_clock_running),
+                    enemies::hooligan_behavior
+                        .run_if(in_play)
+                        .run_if(no_overbrew_freeze)
+                        .run_if(debug_clock_running),
+                    interact::interact
+                        .run_if(modal_closed)
+                        .run_if(debug_clock_running),
+                    interact::fill_hold
+                        .run_if(modal_closed)
+                        .run_if(debug_clock_running),
+                    brewing::first_overbrew_event
+                        .run_if(in_play)
+                        .run_if(debug_clock_running),
+                    interact::brew_qte
+                        .run_if(modal_closed)
+                        .run_if(debug_clock_running),
+                    interact::cool_qte
+                        .run_if(modal_closed)
+                        .run_if(debug_clock_running),
                 )
-                    .chain(),
+                    .chain()
+                    .run_if(debug_closed)
+                    .run_if(ambush_inactive),
+                // --- Подтверждение предыстории ---
+                story::story_input
+                    .run_if(debug_closed)
+                    .run_if(ambush_inactive),
                 (
                     // музыка: меню/игра, петли + приглушение под эффекты
                     audio::music,
@@ -235,19 +287,24 @@ fn main() {
                     // сигналы бочки слышно и из-под модалки — квас бродит!
                     audio::event_sounds,
                 )
-                    .chain(),
-            )
-                .chain(),
-        )
-        .add_systems(
-            Update,
-            (
+                    .chain()
+                    .run_if(debug_closed)
+                    .run_if(ambush_inactive),
+                // Музыка/SFX замирают на открытой отладке и сцене бандита.
+                audio::pause_for_overlays,
                 // модалки и доставка живут поверх замороженного мира
-                modals::modal_input,
-                modals::supply_tick.run_if(no_overbrew_freeze),
+                modals::modal_input
+                    .run_if(debug_closed)
+                    .run_if(ambush_inactive),
+                modals::supply_tick
+                    .run_if(no_overbrew_freeze)
+                    .run_if(debug_clock_running)
+                    .run_if(ambush_inactive),
+                grab_cursor,
                 render_frame,
                 fit_screen,
-            ),
+            )
+                .chain(),
         )
         .run();
 }
@@ -264,6 +321,21 @@ fn in_play(state: Res<GameState>) -> bool {
 /// Мир отрисовывается и в игровой день, и в обучении.
 fn in_world(state: Res<GameState>) -> bool {
     matches!(state.phase, Phase::Playing | Phase::Tutorial)
+}
+
+/// Отладочная консоль открыта — игровой ввод и симуляция не работают.
+fn debug_closed(console: Res<DebugConsole>) -> bool {
+    !console.open
+}
+
+/// `stop` в отладке: время, NPC, бочки и таймеры стоят, но игрок может ходить.
+fn debug_clock_running(console: Res<DebugConsole>) -> bool {
+    !console.time_stopped
+}
+
+/// Сцена бандита держит мир на паузе до подтверждения исхода.
+fn ambush_inactive(ambush: Res<BanditAmbush>) -> bool {
+    !ambush.freeze()
 }
 
 /// Пока идёт первый переброд, день и покупатели замирают; игрок при этом
@@ -356,6 +428,9 @@ fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
     commands.insert_resource(brewing::BrewQte::default());
     commands.insert_resource(brewing::BrewHints::default());
     commands.insert_resource(brewing::FirstOverbrew::default());
+    commands.insert_resource(BanditAmbush::default());
+    commands.insert_resource(ambush::BanditControl::default());
+    commands.insert_resource(DebugConsole::default());
     commands.insert_resource(GameRng(StdRng::seed_from_u64(777)));
     commands.insert_resource(World {
         textures: Textures::generate(),
@@ -369,10 +444,14 @@ fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
 fn grab_cursor(
     mut cursors: Query<&mut CursorOptions, With<PrimaryWindow>>,
     state: Res<GameState>,
+    debug: Res<DebugConsole>,
+    ambush: Res<BanditAmbush>,
 ) {
     // Мышь привязана к камере сразу при входе в игру/обучение — кликать
-    // не нужно. В меню, паузе и на экранах итогов курсор свободен и виден.
-    let want_grab = matches!(state.phase, Phase::Playing | Phase::Tutorial);
+    // не нужно. В меню, паузе, отладке и сцене бандита курсор свободен.
+    let want_grab = matches!(state.phase, Phase::Playing | Phase::Tutorial)
+        && !debug.open
+        && !ambush.freeze();
     for mut c in &mut cursors {
         if want_grab {
             if c.grab_mode != CursorGrabMode::Locked || c.visible {
@@ -414,7 +493,13 @@ fn render_frame(
     qte: Res<brewing::BrewQte>,
     cool: Res<interact::CoolQte>,
     // Пара объединена, чтобы render_frame не превысил лимит параметров Bevy.
-    ui_extra: (Res<brewing::FirstOverbrew>, Res<modals::Modals>),
+    ui_extra: (
+        Res<brewing::FirstOverbrew>,
+        Res<modals::Modals>,
+        Res<DebugConsole>,
+        Res<BanditAmbush>,
+        Res<ambush::BanditControl>,
+    ),
     customers: Query<&Customer>,
     props: Query<&sprites::WorldProp>,
     mut world: ResMut<World>,
@@ -424,6 +509,9 @@ fn render_frame(
 ) {
     let overbrew = &*ui_extra.0;
     let modal = &*ui_extra.1;
+    let debug = &*ui_extra.2;
+    let ambush = &*ui_extra.3;
+    let bandit_control = &*ui_extra.4;
     // мерцание люминесцентных ламп
     let t = time.elapsed_secs();
     let base = 0.94 + 0.04 * (t * 6.3).sin() + 0.02 * (t * 13.7).sin();
@@ -464,6 +552,8 @@ fn render_frame(
         ui_canvas.clear();
         // движется ли игрок (для покачивания предмета в руках)
         let moving = matches!(state.phase, Phase::Playing | Phase::Tutorial)
+            && !debug.open
+            && !ambush.freeze()
             && keys.any_pressed([
                 KeyCode::KeyW,
                 KeyCode::KeyA,
@@ -489,11 +579,28 @@ fn render_frame(
             &prop_list,
             Some(overbrew),
         );
+        // Подбитый глаз — поверх HUD, но под окнами отладки/бандита.
+        if state.black_eye > 0.0 && matches!(state.phase, Phase::Playing | Phase::Tutorial) {
+            ui::draw_black_eye(&mut ui_canvas, t, state.black_eye);
+        }
+        if ambush.freeze() {
+            ui::draw_ambush(&mut ui_canvas, font, &state, &inv, ambush);
+        }
+        if debug.open {
+            ui::draw_debug_console(&mut ui_canvas, font, debug, bandit_control, state.day, t);
+        } else if debug.time_stopped {
+            ui::draw_debug_time_badge(&mut ui_canvas, font);
+        }
     }
 
     // публикация кадров
     if rendered {
         world.renderer.present();
+        // Сцена бандита/«подбитый глаз»: левая половина мира становится
+        // крупнопиксельной и красной, как будто глаз заплыл.
+        if state.black_eye > 0.0 && matches!(state.phase, Phase::Playing | Phase::Tutorial) {
+            ui::black_eye_world(&mut world.renderer.rgba, state.black_eye);
+        }
         let rgba = world.renderer.rgba.clone();
         if let Some(mut img) = images.get_mut(&screen.world) {
             img.data = Some(rgba);

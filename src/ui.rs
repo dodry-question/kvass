@@ -6,17 +6,19 @@
 //! интерфейс рисуется на прозрачном канвасе поверх: текст плотнопиксельный,
 //! читаемый, у каждой надписи своя подложка — ничего не налезает на текстуры.
 
+use crate::ambush::{AmbushStage, BanditAmbush, BanditControl, DEMAND};
 use crate::brewing::{
     BarrelPhase, Barrels, BrewQte, FirstOverbrew, FirstOverbrewStage, FIRST_OVERBREW_RATE,
     QTE_BONUS, seconds_to_next,
 };
 use crate::canvas::{Canvas, CV_H, CV_W};
-use crate::day_cycle::{GameState, Phase, day_len};
+use crate::debug::DebugConsole;
+use crate::day_cycle::{FINAL_OK, GameState, MAX_DAY, Phase, day_len};
 use crate::font::{Font, SZ_H, SZ_L, SZ_M, SZ_S, SZ_T, SZ_XL};
 use crate::inventory::{HandItem, Inventory};
 use crate::map::{Map, Tile};
 use crate::palette::PALETTE;
-use crate::raycaster::{GameCam, HORIZON, SCREEN_H};
+use crate::raycaster::{GameCam, HORIZON, SCREEN_H, SCREEN_W};
 use crate::sprites::{PropIcon, Vessel, TRANSPARENT, prop_icon, vessel_icon};
 
 use bevy::prelude::Vec2;
@@ -125,6 +127,7 @@ pub fn draw_frame_with_overbrew(
 ) {
     match state.phase {
         Phase::Menu => draw_menu(canvas, font, state, t),
+        Phase::Story => draw_story(canvas, font, t),
         Phase::DayEnd => draw_dayend(canvas, font, state, t),
         Phase::Final => draw_final(canvas, font, t),
         Phase::Paused => {
@@ -1752,11 +1755,16 @@ fn draw_dayend(c: &mut Canvas, font: &Font, state: &GameState, t: f32) {
         font.draw(c, px + 80, y + 4, &fr, SZ_S, col::RED_D, 255);
     }
     if !ok {
-        font.draw(c, px + 80, 588, "НОРМА НЕ СДАНА. ЗАВТРА ТОЧНО ПОВЕЗЁТ...", SZ_S, [110, 70, 56], 255);
+        let fail = if state.day >= MAX_DAY {
+            "НОРМА НЕ СДАНА. НО ВЫ ПРОШЛИ ВСЮ ИГРУ."
+        } else {
+            "НОРМА НЕ СДАНА. ЗАВТРА ТОЧНО ПОВЕЗЁТ..."
+        };
+        font.draw(c, px + 80, 588, fail, SZ_S, [110, 70, 56], 255);
     }
     if blink(t, 2.0) {
-        let go = if state.day >= 4 {
-            "ENTER - ФИНАЛ: СЕТЬ ОТКРЫВАЕТСЯ"
+        let go = if state.day >= MAX_DAY {
+            "ENTER - БЛАГОДАРНОСТЬ"
         } else {
             "ENTER - СЛЕДУЮЩИЙ ДЕНЬ"
         };
@@ -1777,17 +1785,38 @@ fn draw_final(c: &mut Canvas, font: &Font, t: f32) {
     star(c, 862, 96, 26, col::RED, 255);
 
     let lines = [
-        ("СЕТЬ ОТКРЫТА!", SZ_T),
-        ("ВЫ ОТКРЫЛИ СЕТЬ КВАСНЫХ ЛАВОК В ГОРОДЕ.", SZ_M),
-        ("ВАШ КВАС СЛАВЕН НА ВСЮ ОКРУГУ.", SZ_M),
-        ("СПАСИБО, ХОЗЯИН!", SZ_L),
+        ("СПАСИБО ЗА ИГРУ!", SZ_T),
+        ("ВЫ ПРОШЛИ ВСЕ ТРИ ДНЯ В КВАСНОЙ ЛАВКЕ.", SZ_M),
+        ("НАДЕЕМСЯ, ВАМ ПОНРАВИЛОСЬ.", SZ_M),
+        ("ДО НОВЫХ ВСТРЕЧ!", SZ_L),
     ];
     let mut y = 330i32;
     for (text, size) in lines {
         y += font.draw_fit_sh(c, 0, y, CV_W, text, size, col::WHITE, 255) + 12;
     }
+
+    // Кнопка «ОК»: возвращает в главное меню (мышь или Enter/Space/E).
+    let (bx, by, bw, bh) = FINAL_OK;
+    c.rect(bx + 5, by + 6, bw, bh, [0, 0, 0], 190);
+    c.rect(bx, by, bw, bh, col::LAMP, 255);
+    c.frame(bx, by, bw, bh, col::BLACK, 255);
+    c.frame(bx + 1, by + 1, bw - 2, bh - 2, col::BLACK, 255);
+    c.rect(bx + 3, by + 3, bw - 6, 2, col::WHITE, 120);
+    c.rect(bx + 3, by + bh - 5, bw - 6, 2, col::RED_D, 170);
+    let ty = by + (bh - font.cap_h(SZ_L)) / 2 - 4;
+    font.draw_fit_sh(c, bx, ty, bw, "ОК", SZ_L, col::INK, 255);
+
     if blink(t, 2.0) {
-        font.draw_fit_sh(c, 0, 712, CV_W, "ESC - В МЕНЮ", SZ_L, col::LAMP, 255);
+        font.draw_fit_sh(
+            c,
+            0,
+            690,
+            CV_W,
+            "ENTER / SPACE / МЫШЬ - ОК",
+            SZ_M,
+            col::LAMP,
+            255,
+        );
     }
 }
 
@@ -2025,3 +2054,457 @@ fn draw_face(c: &mut Canvas, t: f32, mood: u8) {
     }
 }
 
+
+// =================== Предыстория, бандит, отладка ===================
+
+/// Разбивает абзацы/строки по ширине. `\n` сохраняется как пустая строка.
+fn wrap_lines(font: &Font, text: &str, size: usize, max_w: i32) -> Vec<String> {
+    let mut out = Vec::new();
+    for para in text.split('\n') {
+        if para.trim().is_empty() {
+            out.push(String::new());
+            continue;
+        }
+        let mut line = String::new();
+        for word in para.split_whitespace() {
+            let cand = if line.is_empty() {
+                word.to_string()
+            } else {
+                format!("{line} {word}")
+            };
+            if line.is_empty() || font.w(&cand, size) <= max_w {
+                line = cand;
+            } else {
+                out.push(line);
+                line = word.to_string();
+            }
+        }
+        if !line.is_empty() {
+            out.push(line);
+        }
+    }
+    out
+}
+
+/// Рисует текст с переносами; возвращает Y после последней строки.
+fn draw_text_block(
+    c: &mut Canvas,
+    font: &Font,
+    x: i32,
+    y: i32,
+    max_w: i32,
+    text: &str,
+    size: usize,
+    color: [u8; 3],
+) -> i32 {
+    let mut yy = y;
+    for line in wrap_lines(font, text, size, max_w) {
+        if line.is_empty() {
+            yy += font.line(size) / 2;
+            continue;
+        }
+        font.draw(c, x, yy, &line, size, color, 255);
+        yy += font.line(size);
+    }
+    yy
+}
+
+/// Окно предыстории перед первым днём. После подтверждения `story_input`
+/// запускает обычную чёрную заставку «ДЕНЬ 1».
+fn draw_story(c: &mut Canvas, font: &Font, t: f32) {
+    draw_menu_bg(c, t);
+    c.dim(170);
+    let x = 96;
+    let y = 44;
+    let w = CV_W - 192;
+    let h = CV_H - 88;
+    paper_panel(c, x, y, w, h);
+
+    red_plate(c, x + 34, y + 26, w - 68, 70);
+    font.draw_fit_sh(
+        c,
+        x + 58,
+        y + 42,
+        w - 116,
+        "ПРЕДЫСТОРИЯ",
+        SZ_L,
+        col::WHITE,
+        255,
+    );
+    font.draw_fit(
+        c,
+        x + 58,
+        y + 104,
+        w - 116,
+        "КВАСНАЯ ЛАВКА - НАЧАЛО",
+        SZ_S,
+        col::TILE_D,
+        235,
+    );
+
+    let mut yy = y + 150;
+    for (i, para) in crate::story::STORY_TEXT.split("\n\n").enumerate() {
+        let color = if i == 2 { col::RED_D } else { col::INK };
+        yy = draw_text_block(c, font, x + 58, yy, w - 116, para, SZ_M, color);
+        yy += 18;
+    }
+
+    // нижняя красная линия и подсказка
+    c.rect(x + 58, y + h - 86, w - 116, 3, col::RED, 210);
+    let hint = "ENTER / ПРОБЕЛ — НАЧАТЬ ДЕНЬ 1";
+    if blink(t, 1.4) {
+        let hw = font.w(hint, SZ_M);
+        font.draw_sh(
+            c,
+            x + (w - hw) / 2,
+            y + h - 62,
+            hint,
+            SZ_M,
+            col::INK,
+            255,
+        );
+    } else {
+        let hw = font.w(hint, SZ_M);
+        font.draw_sh(
+            c,
+            x + (w - hw) / 2,
+            y + h - 62,
+            hint,
+            SZ_M,
+            col::TILE_D,
+            200,
+        );
+    }
+}
+
+/// Окно бандита: реплика, три варианта, исход. Ввод — 1/2/3 или W/S+Enter.
+pub fn draw_ambush(
+    c: &mut Canvas,
+    font: &Font,
+    state: &GameState,
+    inv: &Inventory,
+    ambush: &BanditAmbush,
+) {
+    // Пока бандит выбегает, не закрываем мир панелью: игрок должен увидеть
+    // рывок из-за угла. Только короткая красная вспышка по краям.
+    if ambush.stage == AmbushStage::Rushing {
+        c.rect(0, 0, CV_W, 18, [150, 0, 0], 120);
+        c.rect(0, CV_H - 18, CV_W, 18, [150, 0, 0], 120);
+        c.rect(0, 0, 18, CV_H, [150, 0, 0], 120);
+        c.rect(CV_W - 18, 0, 18, CV_H, [150, 0, 0], 120);
+        return;
+    }
+    c.dim(140);
+    let x = 140;
+    let y = 78;
+    let w = CV_W - 280;
+    let h = CV_H - 156;
+    panel(c, x, y, w, h);
+
+    red_plate(c, x + 30, y + 24, 320, 64);
+    font.draw_fit_sh(
+        c,
+        x + 50,
+        y + 36,
+        280,
+        "БАНДИТ",
+        SZ_L,
+        col::WHITE,
+        255,
+    );
+    font.draw_fit(
+        c,
+        x + 370,
+        y + 38,
+        w - 400,
+        "КОРИДОР - ВОЗВРАЩЕНИЕ СО СКЛАДА",
+        SZ_S,
+        col::PLASTER,
+        220,
+    );
+
+    let phrase_y = draw_text_block(
+        c,
+        font,
+        x + 40,
+        y + 116,
+        w - 80,
+        ambush.phrase(),
+        SZ_M,
+        col::LAMP,
+    );
+
+    match ambush.stage {
+        AmbushStage::Choice => {
+            let item = crate::ambush::item_label(inv).unwrap_or_else(|| "НЕТ ПРЕДМЕТА".into());
+            let opts = [
+                format!("1. ОТДАТЬ {} К.   (У ВАС {} К.)", DEMAND, state.money),
+                format!("2. ИСПОЛЬЗОВАТЬ: {item}"),
+                "3. СОВРАТЬ".to_string(),
+            ];
+            let mut oy = phrase_y + 28;
+            for (i, opt) in opts.iter().enumerate() {
+                let selected = ambush.choice == i;
+                c.rect(x + 42, oy, w - 84, 62, [12, 10, 8], 225);
+                c.frame(
+                    x + 42,
+                    oy,
+                    w - 84,
+                    62,
+                    if selected { col::LAMP } else { col::METAL_D },
+                    255,
+                );
+                if selected {
+                    c.rect(x + 48, oy + 8, 5, 46, col::RED, 255);
+                }
+                font.draw_fit(
+                    c,
+                    x + 66,
+                    oy + 16,
+                    w - 130,
+                    opt,
+                    SZ_M,
+                    if selected { col::LAMP } else { col::WHITE },
+                    255,
+                );
+                oy += 74;
+            }
+            if !ambush.notice.is_empty() {
+                font.draw_fit(
+                    c,
+                    x + 46,
+                    y + h - 112,
+                    w - 92,
+                    &ambush.notice,
+                    SZ_S,
+                    col::RED,
+                    255,
+                );
+            }
+            let hint = "1 / 2 / 3 ИЛИ W / S + ENTER    |    ВРЕМЯ ОСТАНОВЛЕНО";
+            font.draw_fit(
+                c,
+                x + 46,
+                y + h - 62,
+                w - 92,
+                hint,
+                SZ_S,
+                col::TILE,
+                235,
+            );
+        }
+        AmbushStage::Result => {
+            let mut ry = y + 220;
+            ry = draw_text_block(
+                c,
+                font,
+                x + 46,
+                ry,
+                w - 92,
+                &ambush.result,
+                SZ_M,
+                if ambush.result_good { col::LAMP } else { col::WHITE },
+            );
+            if ambush.black_eye_hit {
+                font.draw_fit(
+                    c,
+                    x + 46,
+                    ry + 18,
+                    w - 92,
+                    "ГЛАЗ ЗАПЛЫЛ: ПОЛОВИНА ЭКРАНА КРАСНАЯ И МУТНАЯ",
+                    SZ_S,
+                    col::RED,
+                    255,
+                );
+            }
+            let hint = "ENTER / ПРОБЕЛ — ПРОДОЛЖИТЬ";
+            let hw = font.w(hint, SZ_M);
+            font.draw_sh(
+                c,
+                x + (w - hw) / 2,
+                y + h - 66,
+                hint,
+                SZ_M,
+                col::LAMP,
+                255,
+            );
+        }
+        _ => {}
+    }
+}
+
+/// Оверлей отладочной консоли. Рисуется поверх любого экрана.
+pub fn draw_debug_console(
+    c: &mut Canvas,
+    font: &Font,
+    debug: &DebugConsole,
+    control: &BanditControl,
+    day: u32,
+    t: f32,
+) {
+    c.dim(80);
+    let x = 64;
+    let y = 54;
+    let w = CV_W - 128;
+    let h = CV_H - 108;
+    panel(c, x, y, w, h);
+    red_plate(c, x + 24, y + 20, 300, 58);
+    font.draw_fit_sh(
+        c,
+        x + 42,
+        y + 30,
+        264,
+        "ОТЛАДКА",
+        SZ_L,
+        col::WHITE,
+        255,
+    );
+    font.draw_fit(
+        c,
+        x + 344,
+        y + 36,
+        w - 380,
+        "` — ЗАКРЫТЬ  |  ESC — ЗАКРЫТЬ",
+        SZ_S,
+        col::TILE,
+        230,
+    );
+
+    let mut yy = y + 108;
+    for line in &debug.log {
+        font.draw_fit(c, x + 34, yy, w - 68, line, SZ_S, col::TILE, 240);
+        yy += font.line(SZ_S) + 4;
+    }
+
+    // поле ввода
+    let ix = x + 28;
+    let iy = y + h - 180;
+    let iw = w - 56;
+    c.rect(ix, iy, iw, 54, [10, 9, 8], 245);
+    c.frame(ix, iy, iw, 54, col::LAMP, 255);
+    let cursor = if blink(t, 2.4) { "_" } else { " " };
+    let shown = format!("> {}{}", debug.input, cursor);
+    font.draw_fit(c, ix + 14, iy + 12, iw - 28, &shown, SZ_M, col::LAMP, 255);
+
+    let status = if debug.time_stopped {
+        "ВРЕМЯ ОСТАНОВЛЕНО (stop). play — продолжить."
+    } else {
+        "ВРЕМЯ ИДЁТ. stop — остановить."
+    };
+    font.draw_fit(c, ix, iy + 70, iw, status, SZ_S, col::WHITE, 235);
+    let bandit_status = if control.disabled {
+        "БАНДИТЫ: ВЫКЛЮЧЕНЫ (unband — включить)".to_string()
+    } else if control.force_next {
+        "БАНДИТЫ: ВКЛЮЧЕНЫ. СЛЕДУЮЩИЙ ВЫХОД СО СКЛАДА ГАРАНТИРОВАН".to_string()
+    } else {
+        format!(
+            "БАНДИТЫ: ВКЛЮЧЕНЫ, СЕГОДНЯ {}/{}",
+            control.spawned_today,
+            BanditControl::max_for_day(day)
+        )
+    };
+    font.draw_fit(
+        c,
+        ix,
+        iy + 96,
+        iw,
+        &bandit_status,
+        SZ_S,
+        if control.disabled { col::RED } else { col::LAMP },
+        235,
+    );
+    font.draw_fit(
+        c,
+        ix,
+        iy + 122,
+        iw,
+        "day 1 | day 2 | day 3     stop     play     band     unband     help",
+        SZ_S,
+        col::TILE,
+        235,
+    );
+}
+
+/// Небольшая плашка, если `stop` активен, а консоль закрыта.
+pub fn draw_debug_time_badge(c: &mut Canvas, font: &Font) {
+    let text = "ВРЕМЯ ОСТАНОВЛЕНО (ОТЛАДКА)";
+    let w = font.w(text, SZ_S) + 34;
+    let x = (CV_W - w) / 2;
+    let y = 8;
+    panel(c, x, y, w, 36);
+    font.draw_fit(c, x + 12, y + 8, w - 24, text, SZ_S, col::LAMP, 255);
+}
+
+/// Красно-мутный «подбитый глаз»: левая половина экрана. Рисуется поверх
+/// HUD, но под окнами отладки/бандита.
+pub fn draw_black_eye(c: &mut Canvas, t: f32, secs: f32) {
+    let strength = (secs / 5.0).clamp(0.0, 1.0);
+    if strength <= 0.0 {
+        return;
+    }
+    let half = CV_W / 2;
+    c.rect(0, 0, half, CV_H, [150, 8, 8], (88.0 * strength) as u8);
+    // крупные «плывущие» пятна — имитация мутной пелены
+    let step = 28i32;
+    for y in (0..CV_H).step_by(step as usize) {
+        for x in (0..half).step_by(step as usize) {
+            let n = ((x as f32 * 0.013 + y as f32 * 0.019 + t * 0.8).sin() * 0.5 + 0.5)
+                .clamp(0.0, 1.0);
+            if n > 0.52 {
+                c.rect(
+                    x,
+                    y,
+                    step,
+                    step,
+                    [92, 0, 0],
+                    (46.0 * strength * n) as u8,
+                );
+            } else if n < 0.18 {
+                c.rect(
+                    x,
+                    y,
+                    step,
+                    step,
+                    [205, 155, 145],
+                    (18.0 * strength) as u8,
+                );
+            }
+        }
+    }
+    c.rect(half - 4, 0, 4, CV_H, [70, 0, 0], (110.0 * strength) as u8);
+}
+
+/// Мир под «подбитым глазом»: левая половина крупнопиксельная и красная.
+/// Применяется к готовому RGBA-кадру рейкастера после `present()`.
+pub fn black_eye_world(rgba: &mut [u8], secs: f32) {
+    let strength = (secs / 5.0).clamp(0.0, 1.0);
+    if strength <= 0.0 {
+        return;
+    }
+    let block = 4usize;
+    let half = SCREEN_W / 2;
+    let mut by = 0usize;
+    while by < SCREEN_H {
+        let mut bx = 0usize;
+        while bx < half {
+            let o = (by * SCREEN_W + bx) * 4;
+            let r = rgba[o] as f32;
+            let g = rgba[o + 1] as f32;
+            let b = rgba[o + 2] as f32;
+            let rr = (r * 0.55 + 170.0 * 0.45 * strength).min(255.0) as u8;
+            let gg = (g * 0.62).min(255.0) as u8;
+            let bb = (b * 0.62).min(255.0) as u8;
+            for y in by..(by + block).min(SCREEN_H) {
+                for x in bx..(bx + block).min(half) {
+                    let i = (y * SCREEN_W + x) * 4;
+                    rgba[i] = rr;
+                    rgba[i + 1] = gg;
+                    rgba[i + 2] = bb;
+                    rgba[i + 3] = 255;
+                }
+            }
+            bx += block;
+        }
+        by += block;
+    }
+}

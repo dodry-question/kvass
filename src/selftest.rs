@@ -9,6 +9,7 @@ use std::path::Path;
 
 use bevy::prelude::Vec2;
 
+use crate::ambush::{AmbushStage, BanditAmbush, BanditControl};
 use crate::brewing::{
     Barrel, BarrelPhase, Barrels, BrewQte, FirstOverbrew, FirstOverbrewStage,
 };
@@ -16,6 +17,7 @@ use crate::canvas::{Canvas, CV_H, CV_W};
 use crate::day_cycle::{
     DAY_INTRO_SECS, GameState, PAUSE_FROM_PLAYING, Phase, SPAWN_ANGLE, SPAWN_X, SPAWN_Y, norm_for,
 };
+use crate::debug::DebugConsole;
 use crate::font::{Font, SZ_L, SZ_M, SZ_S};
 use crate::inventory::{HandItem, Inventory};
 use crate::interact::CoolQte;
@@ -1353,6 +1355,135 @@ pub fn run() {
         &no_props,
     );
     snap(&canvas, Some(&world_storage), "23d_storage.bmp");
+
+    // --- 23e. Предыстория перед первым днём ---
+    let story_state = GameState {
+        phase: Phase::Story,
+        ..Default::default()
+    };
+    canvas.clear();
+    ui::draw_frame(
+        &mut canvas,
+        &font,
+        &story_state,
+        &inv,
+        &barrels,
+        &no_qte,
+        &no_cool,
+        &no_cust,
+        1.0,
+        &cam,
+        &map,
+        false,
+        &no_modal,
+        &no_props,
+    );
+    snap(&canvas, None, "23e_story.bmp");
+
+    // --- 23f. Отладочная консоль поверх игры ---
+    let dbg = DebugConsole {
+        open: true,
+        input: "day 2".into(),
+        log: vec![
+            "КОНСОЛЬ ОТЛАДКИ".into(),
+            "day 1..3 | stop | play | band | unband".into(),
+            "ДЕНЬ 1 ЗАГРУЖЕН".into(),
+        ],
+        ..Default::default()
+    };
+    canvas.clear();
+    ui::draw_frame(
+        &mut canvas,
+        &font,
+        &after_intro,
+        &inv,
+        &barrels,
+        &no_qte,
+        &no_cool,
+        &no_cust,
+        3.4,
+        &storage_cam,
+        &map,
+        false,
+        &no_modal,
+        &no_props,
+    );
+    let dbg_control = BanditControl::default();
+    ui::draw_debug_console(&mut canvas, &font, &dbg, &dbg_control, 1, 3.4);
+    snap(&canvas, Some(&world_storage), "23f_debug.bmp");
+
+    // --- 23g. Бандит в коридоре: выбор ответа ---
+    let bandit_inv = Inventory {
+        hands: [Some(HandItem::Bucket), None, None, None],
+        selected: 0,
+        ..Default::default()
+    };
+    let bandit_choice = BanditAmbush {
+        stage: AmbushStage::Choice,
+        phrase: 0,
+        choice: 1,
+        ..Default::default()
+    };
+    canvas.clear();
+    ui::draw_frame(
+        &mut canvas,
+        &font,
+        &after_intro,
+        &bandit_inv,
+        &barrels,
+        &no_qte,
+        &no_cool,
+        &no_cust,
+        3.4,
+        &storage_cam,
+        &map,
+        false,
+        &no_modal,
+        &no_props,
+    );
+    ui::draw_ambush(&mut canvas, &font, &after_intro, &bandit_inv, &bandit_choice);
+    snap(&canvas, Some(&world_storage), "23g_ambush_choice.bmp");
+
+    // --- 23h. Ложь не сработала: подбитый глаз ---
+    let hurt = GameState {
+        phase: Phase::Playing,
+        day: 1,
+        money: 30,
+        norm: norm_for(1),
+        time_left: 240.0,
+        black_eye: 45.0,
+        ..Default::default()
+    };
+    let bandit_result = BanditAmbush {
+        stage: AmbushStage::Result,
+        phrase: 2,
+        result: format!(
+            "ВЫ: «{}»\n\nБАНДИТ: Заливаешь, уборщик?! Получай!",
+            crate::ambush::LIE_LINE
+        ),
+        black_eye_hit: true,
+        ..Default::default()
+    };
+    canvas.clear();
+    ui::draw_frame(
+        &mut canvas,
+        &font,
+        &hurt,
+        &bandit_inv,
+        &barrels,
+        &no_qte,
+        &no_cool,
+        &no_cust,
+        3.4,
+        &storage_cam,
+        &map,
+        false,
+        &no_modal,
+        &no_props,
+    );
+    ui::draw_black_eye(&mut canvas, 3.4, hurt.black_eye);
+    ui::draw_ambush(&mut canvas, &font, &hurt, &bandit_inv, &bandit_result);
+    snap(&canvas, Some(&world_storage), "23h_ambush_black_eye.bmp");
 
     // --- 24. Логика начала дня: телепорт на спавн + заставка «ДЕНЬ N» ---
     assert_eq!(crate::tutorial::TUT_STEPS.len(), 10, "в обучении 10 шагов");

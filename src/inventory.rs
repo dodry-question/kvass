@@ -199,6 +199,48 @@ impl Inventory {
         }
     }
 
+    /// Название первого доступного предмета «под рукой» — для сцены бандита.
+    /// Если руки пусты, годится сырьё со склада (сухари/сахар).
+    pub fn first_item_name(&self) -> Option<String> {
+        if let Some(item) = self.hands.iter().flatten().next() {
+            return Some(item.name());
+        }
+        if self.stock_croutons > 0 {
+            return Some("СУХАРИ".into());
+        }
+        if self.stock_sugar > 0 {
+            return Some("САХАР С ИЗЮМОМ".into());
+        }
+        None
+    }
+
+    /// Забирает один предмет для сцены бандита: сначала из рук, затем
+    /// одну порцию сырья со склада. Возвращает именно потраченный предмет.
+    pub fn take_any_item(&mut self) -> Option<HandItem> {
+        if let Some(idx) = self.hands.iter().position(|h| h.is_some()) {
+            if matches!(self.hands[idx], Some(HandItem::Bucket)) {
+                self.hands[idx] = None;
+                return Some(HandItem::Bucket);
+            }
+            let old = self.selected;
+            self.selected = idx;
+            let item = self.take_one_from_selected();
+            self.selected = old;
+            if item.is_some() {
+                return item;
+            }
+        }
+        if self.stock_croutons > 0 {
+            self.stock_croutons -= 1;
+            return Some(HandItem::Croutons(1));
+        }
+        if self.stock_sugar > 0 {
+            self.stock_sugar -= 1;
+            return Some(HandItem::Sugar(1));
+        }
+        None
+    }
+
     pub fn has_bucket(&self) -> bool {
         self.hands.iter().any(|h| matches!(h, Some(HandItem::Bucket)))
     }

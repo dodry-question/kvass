@@ -7,7 +7,7 @@ use bevy::prelude::*;
 
 use crate::brewing::{BarrelPhase, Barrels, BrewQte};
 use crate::customer::{CustState, Customer, QUEUE_SPOTS};
-use crate::day_cycle::{give_start_package, start_day, GameState, Phase};
+use crate::day_cycle::{GameState, Phase};
 use crate::inventory::{HandItem, Inventory};
 use crate::sprites::{NpcKind, Vessel};
 
@@ -66,15 +66,13 @@ pub const TUT_STEPS: [TutStep; 10] = [
 /// Логика обучения: шаги, спавн гостя, быстрое брожение, переход на склад.
 pub fn tutorial_system(
     time: Res<Time>,
-    keys: Res<ButtonInput<KeyCode>>,
+    mut keys: ResMut<ButtonInput<KeyCode>>,
     mut state: ResMut<GameState>,
     mut inv: ResMut<Inventory>,
     mut barrels: ResMut<Barrels>,
     qte: Res<BrewQte>,
     customers: Query<(Entity, &Customer)>,
     mut commands: Commands,
-    mut dirty: ResMut<crate::day_cycle::Dirty>,
-    mut cam: ResMut<crate::raycaster::GameCam>,
 ) {
     if state.phase != Phase::Tutorial {
         return;
@@ -93,15 +91,8 @@ pub fn tutorial_system(
             state.tut_step = 5;
             state.notify("ТАК ДЕРЖАТЬ!".into());
         } else {
-            finish(
-                &mut state,
-                &mut inv,
-                &mut barrels,
-                &customers,
-                &mut commands,
-                &mut dirty,
-                &mut cam,
-            );
+            finish(&mut state, &customers, &mut commands);
+            keys.clear();
         }
         return;
     }
@@ -173,15 +164,8 @@ pub fn tutorial_system(
     };
     if done {
         if state.tut_step >= 9 {
-            finish(
-                &mut state,
-                &mut inv,
-                &mut barrels,
-                &customers,
-                &mut commands,
-                &mut dirty,
-                &mut cam,
-            );
+            finish(&mut state, &customers, &mut commands);
+            keys.clear();
         } else {
             state.tut_step += 1;
             match state.tut_step {
@@ -214,12 +198,8 @@ fn fill_trash_practice(inv: &mut Inventory) {
 
 fn finish(
     state: &mut GameState,
-    inv: &mut Inventory,
-    barrels: &mut Barrels,
     customers: &Query<(Entity, &Customer)>,
     commands: &mut Commands,
-    dirty: &mut crate::day_cycle::Dirty,
-    cam: &mut crate::raycaster::GameCam,
 ) {
     state.tut_done = true;
     state.tut_step = 0;
@@ -227,12 +207,15 @@ fn finish(
         commands.entity(e).despawn();
     }
     if state.tut_after_game {
-        // обучение — вход в основной цикл: день стартует сразу
-        give_start_package(state, inv);
-        // ТЗ №3: день начинается сразу, без экрана закупки.
-        // start_day сам вернёт игрока на стартовую точку и включит
-        // заставку «ДЕНЬ 1» с медленным проявлением магазина.
-        start_day(state, barrels, dirty, cam);
+        // Обучение было входом в игру: перед «ДЕНЬ 1» показываем ту же
+        // предысторию, что и при обычном ВХОДе из меню. Стартовый пакет
+        // выдаст story_input после подтверждения.
+        state.phase = Phase::Story;
+        state.menu_view = crate::day_cycle::MenuView::Main;
+        state.menu_sel = 0;
+        state.tut_locked = false;
+        state.tut_after_game = false;
+        state.msg_t = 0.0;
     } else {
         // обучение из меню — отдельная секция: возвращаемся в главное меню
         state.phase = Phase::Menu;

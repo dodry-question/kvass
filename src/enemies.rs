@@ -5,6 +5,7 @@ use std::collections::VecDeque;
 use bevy::prelude::*;
 use rand::prelude::*;
 
+use crate::ambush::BanditControl;
 use crate::brewing::{BarrelPhase, Barrels};
 use crate::customer::{CustState, Customer, QUEUE_SPOTS};
 use crate::day_cycle::{GameState, GameRng, Phase};
@@ -105,8 +106,18 @@ pub fn hooligan_spawn(
     mut cooldown: Local<f32>,
     time: Res<Time>,
     bank: Res<crate::audio::SoundBank>,
+    mut control: ResMut<BanditControl>,
 ) {
     if state.phase != Phase::Playing || state.day < 2 {
+        return;
+    }
+    if control.day != state.day {
+        control.reset_day(state.day);
+        *cooldown = 0.0;
+    }
+    // `unband` выключает поток хулиганов; лимит дня — 3 на второй день
+    // и 4 на третий (общий счётчик с коридорной сценой).
+    if !control.can_spawn(state.day) {
         return;
     }
     *cooldown -= time.delta_secs();
@@ -160,6 +171,7 @@ pub fn hooligan_spawn(
             smashed: false,
         },
     ));
+    control.note_spawn();
 }
 
 /// Поведение бандитов (ТЗ №7): требование дани -> E у кассы платит 30 К ->

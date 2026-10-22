@@ -471,7 +471,7 @@ const MUSIC_FADE: f32 = 0.8;
 
 fn wanted_track(phase: Phase) -> Option<Track> {
     match phase {
-        Phase::Menu => Some(Track::Menu),
+        Phase::Menu | Phase::Story => Some(Track::Menu),
         Phase::Tutorial | Phase::Playing | Phase::Paused => Some(Track::Game),
         Phase::DayEnd => Some(Track::DayEnd),
         Phase::Final => None,
@@ -645,4 +645,26 @@ pub fn event_sounds(
         play_sfx(&mut commands, &bank, "door", 0.5);
     }
     bank.last_customers = n;
+}
+
+/// Полная пауза звука, пока открыта отладочная консоль или идёт сцена
+/// бандита. Музыка и уже запущенные SFX/петли замирают на месте; после
+/// закрытия продолжают с той же точки. Новые звуки в это время не спавнятся
+/// (игровые аудиосистемы гейтятся в main.rs), но проверка каждого sink
+/// защищает и от «догоняющих» звуков предыдущего кадра.
+pub fn pause_for_overlays(
+    debug: Res<crate::debug::DebugConsole>,
+    ambush: Res<crate::ambush::BanditAmbush>,
+    sinks: Query<&AudioSink>,
+) {
+    let should_pause = debug.open || ambush.freeze();
+    for sink in &sinks {
+        if should_pause {
+            if !sink.is_paused() {
+                sink.pause();
+            }
+        } else if sink.is_paused() {
+            sink.play();
+        }
+    }
 }
