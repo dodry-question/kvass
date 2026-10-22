@@ -932,7 +932,7 @@ fn draw_tutorial(
 /// кнопок и подсказка ввода. Старый «входной» экран с киоском удалён —
 /// его заменяет пиксельная обоиная картинка.
 fn draw_menu(c: &mut Canvas, font: &Font, state: &GameState, t: f32) {
-    draw_menu_bg(c);
+    draw_menu_bg(c, t);
 
     // титул слева сверху — на пустом небе обоев
     red_plate(c, 70, 84, 640, 130);
@@ -980,32 +980,46 @@ fn draw_menu(c: &mut Canvas, font: &Font, state: &GameState, t: f32) {
     }
 }
 
-/// Обои 1280×720: рисуются 1:1 по ширине (без искажения пикселей),
-/// сверху/снизу — полоски в тон левым краям картинки. Нет файла — тёмная
-/// заливка-запаска.
-fn draw_menu_bg(c: &mut Canvas) {
+/// Горизонтальная «живость» входного экрана: обои слегка ездят влево-вправо
+/// (±`BG_PAN_A` px, период ~8 с). Картинка рисуется с зумом на 2×амплитуду —
+/// запас по краям, чтобы при сдвиге не обнажались пустоты (без искажения
+/// пропорций: зум одинаковый по обеим осям, вертикаль просто ест полоски).
+const BG_PAN_A: i32 = 26;
+const BG_PAN_W: f32 = 0.785; // рад/с ≈ период 8 с
+
+/// Обои 1280×720 с горизонтальной панорамой: зум + сдвиг, полоски сверху/
+/// снизу в тон левым краям картинки. Нет файла — тёмная заливка-запаска.
+fn draw_menu_bg(c: &mut Canvas, t: f32) {
     let Some(bg) = crate::menu::bg() else {
         c.rect(0, 0, CV_W, CV_H, col::INK, 255);
         return;
     };
-    let scale = CV_W as f32 / bg.w as f32;
-    let dh = (bg.h as f32 * scale) as i32;
+    // зум с зазором под сдвиг: ширина кадра + 2×амплитуда
+    let z = (CV_W as f32 + 2.0 * BG_PAN_A as f32) / bg.w as f32;
+    let dw = (bg.w as f32 * z) as i32;
+    let dh = (bg.h as f32 * z) as i32;
     let y0 = ((CV_H - dh) / 2).max(0);
+    let off = (BG_PAN_A as f32 * (t * BG_PAN_W).sin()).round() as i32;
+    let x0 = -BG_PAN_A + off;
     // полоски в тон левому верхнему и левому нижнему пикселям картинки
     let top = [bg.px[0], bg.px[1], bg.px[2]];
     let bi = (bg.h - 1) * bg.w * 4;
     let bot = [bg.px[bi], bg.px[bi + 1], bg.px[bi + 2]];
     c.rect(0, 0, CV_W, y0, top, 255);
     c.rect(0, y0 + dh, CV_W, CV_H - (y0 + dh), bot, 255);
-    // сама картинка (nearest по ширине; при 1280 — точное копирование)
+    // сама картинка (nearest) со сдвигом
     for dy in 0..dh {
-        let sy = ((dy as f32 / scale) as usize).min(bg.h - 1);
-        let di = ((y0 + dy) as usize * CV_W as usize) * 4;
+        let cy = y0 + dy;
+        if cy < 0 || cy >= CV_H {
+            continue;
+        }
+        let sy = ((dy as f32 / z) as usize).min(bg.h - 1);
         let si = sy * bg.w * 4;
-        for dx in 0..CV_W as usize {
-            let sx = ((dx as f32 / scale) as usize).min(bg.w - 1);
+        let di = (cy as usize * CV_W as usize) * 4;
+        for cx in 0..CV_W {
+            let sx = (((cx - x0) as f32 / z) as usize).min(bg.w - 1);
             let s = si + sx * 4;
-            let d = di + dx * 4;
+            let d = di + cx as usize * 4;
             c.px[d] = bg.px[s];
             c.px[d + 1] = bg.px[s + 1];
             c.px[d + 2] = bg.px[s + 2];
