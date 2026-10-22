@@ -5,6 +5,21 @@ Soviet kvass shop — Doom-style рейкастер на Rust + Bevy. Vyatka Owl
 Пиксель-арт 640×400, собственная CPU-рейкастерная отрисовка (DDA по Лодеву),
 палитра на 24 цвета, Doom-colormap, дизеринг Байера. Кириллический интерфейс.
 
+## Скриншоты
+
+| Торговый зал | Склад |
+|---|---|
+| ![Торговый зал](docs/screenshots/hall.png) | ![Склад](docs/screenshots/storage.png) |
+
+| Главное меню | Итоги дня |
+|---|---|
+| ![Главное меню](docs/screenshots/menu.png) | ![Итоги дня](docs/screenshots/dayend.png) |
+
+Прилавок — ряд честных полублоков: у каждого тайла свой фасад и столешница,
+без «невидимых кубов» и исчезающих касс:
+
+![Прилавок](docs/screenshots/counter.png)
+
 ---
 
 ## Сборка бинарника
@@ -71,6 +86,13 @@ cargo build --release
 
 ### Windows
 
+Готовый exe — в [Releases](https://github.com/dodry-question/kvass/releases/latest).
+Он **самодостаточен**: музыка, SFX, шрифты, фон и иконка уже внутри, папка
+`assets` для запуска не нужна.
+
+Сборка из исходников (папка `assets` нужна только на этапе компиляции — всё
+вшивается в exe):
+
 ```powershell
 cargo build --release
 .\target\release\kvass-shop.exe
@@ -81,8 +103,8 @@ cargo build --release
 1. Создайте бутылку (тип **Gaming**) и поставьте в ней зависимости
    **DXVK** и **VKD3D** (в настройках бутылки). Это обязательно: Bevy
    рисует через Direct3D 12, который в Wine идёт через vkd3d → Vulkan.
-2. Положите `kvass-shop.exe` рядом с папкой `assets/` (например в
-   `drive_c/kvass-shop/` внутри бутылки) — игра ищет `assets` рядом с exe.
+2. Положите `kvass-shop.exe` в бутылку (например, в `drive_c/kvass-shop/`).
+   Папка `assets` не нужна — все ресурсы вшиты в exe.
 3. В Bottles: «Запустить EXE» / «Добавить ярлык» → выберите `kvass-shop.exe`.
 4. Если чёрный экран или окно не появляется — запустите exe с аргументом
    `--windowed` (в Bottles: поле «Аргументы» у ярлыка): игра откроется
@@ -95,15 +117,14 @@ cargo build --release
 
 ### Пакетирование для раздачи (Linux)
 
-Игра ищет каталог `assets` рядом с исполняемым файлом, затем в текущей
-папке. Поэтому достаточно положить бинарник рядом с `assets/`:
+Бинарник самодостаточен: музыка, SFX, шрифты и фон вшиты, папка `assets`
+для запуска не нужна. Достаточно одного файла:
 
 ```bash
 cargo build --release
 mkdir -p dist
 cp target/release/kvass-shop dist/
-cp -r assets dist/
-tar -C dist -czf kvass-shop-linux.tar.gz .
+tar -C dist -czf kvass-shop-linux.tar.gz kvass-shop
 ```
 
 Раздаёте `kvass-shop-linux.tar.gz` — распаковал, запустил `./kvass-shop`.

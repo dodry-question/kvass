@@ -1188,6 +1188,34 @@ pub fn run() {
     );
     snap(&canvas, Some(&world_spawn), "23c_spawn_view.bmp");
 
+    // --- 23d. Склад: сухари на северной стене, сахар на южной, вода справа ---
+    let storage_cam = GameCam {
+        x: 14.3,
+        y: 7.7,
+        angle: -0.65,
+    };
+    renderer.render(&map, &textures, &storage_cam, 1.0);
+    renderer.present();
+    let world_storage = renderer.rgba.clone();
+    canvas.clear();
+    ui::draw_frame(
+        &mut canvas,
+        &font,
+        &after_intro,
+        &inv,
+        &barrels,
+        &no_qte,
+        &no_cool,
+        &no_cust,
+        3.4,
+        &storage_cam,
+        &map,
+        false,
+        &no_modal,
+        &no_props,
+    );
+    snap(&canvas, Some(&world_storage), "23d_storage.bmp");
+
     // --- 24. Логика начала дня: телепорт на спавн + заставка «ДЕНЬ N» ---
     assert_eq!(crate::tutorial::TUT_STEPS.len(), 10, "в обучении 10 шагов");
     assert_eq!(crate::tutorial::TUT_STEPS[8].target, (8.5, 5.5), "шаг 9 — мойка");
