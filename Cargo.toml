@@ -1,0 +1,16 @@
+[package]
+name = "kvass-shop"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bevy = { version = "0.20", features = ["wav", "flac"] }
+fontdue = "0.9"
+rand = "0.10"
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3

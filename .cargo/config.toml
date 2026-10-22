@@ -1,0 +1,4 @@
+# Статичный CRT для Windows-сборки: exe не требует Visual C++
+# Redistributable (важно для запуска в Wine/Bottles).
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
