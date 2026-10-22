@@ -152,6 +152,12 @@ pub fn draw_frame(
             }
         }
     }
+
+    // Заставка начала дня — поверх всего, включая HUD: чёрная пелена
+    // с «ДЕНЬ N» медленно рассеивается и открывает лавку.
+    if state.phase == Phase::Playing && state.day_intro > 0.0 {
+        draw_day_intro(canvas, font, state);
+    }
 }
 
 // =================== Панели и утилиты ===================
@@ -948,6 +954,40 @@ fn draw_tutorial(
 }
 
 // =================== Экраны ===================
+
+/// Заставка начала дня: чёрная пелена с надписью «ДЕНЬ N» медленно
+/// рассеивается — игрок «приходит в себя» и видит лавку. Надпись гаснет
+/// вместе с пеленой, поэтому переход читается как одно целое.
+fn draw_day_intro(c: &mut Canvas, font: &Font, state: &GameState) {
+    let total = crate::day_cycle::DAY_INTRO_SECS.max(0.01);
+    let left = state.day_intro.clamp(0.0, total);
+    let passed = total - left;
+    // 0.8 с держим полную тьму, дальше — плавное проявление (smoothstep).
+    let hold = 0.8;
+    let k = ((passed - hold) / (total - hold).max(0.01)).clamp(0.0, 1.0);
+    let k = k * k * (3.0 - 2.0 * k);
+    let a = (255.0 * (1.0 - k)).round() as u8;
+    c.dim(a);
+
+    let title = format!("ДЕНЬ {}", state.day);
+    let sub = format!("НОРМА {} К.   СМЕНА НАЧАЛАСЬ", state.norm);
+    let ty = CV_H / 2 - 78;
+    let tw = font.w(&title, SZ_H);
+    font.draw_sh(c, (CV_W - tw) / 2, ty, &title, SZ_H, col::LAMP, a);
+    // красная черта под заголовком — как на вывеске
+    let lw = (tw * 3 / 4).clamp(160, 420);
+    c.rect(CV_W / 2 - lw / 2, ty + font.line(SZ_H) + 2, lw, 3, col::RED, a);
+    let sw = font.w(&sub, SZ_M);
+    font.draw_sh(
+        c,
+        (CV_W - sw) / 2,
+        ty + font.line(SZ_H) + 22,
+        &sub,
+        SZ_M,
+        col::TILE,
+        a,
+    );
+}
 
 /// Главное меню на обоях лавки (assets/menu_bg.png): заголовок, колонка
 /// кнопок и подсказка ввода. Старый «входной» экран с киоском удалён —

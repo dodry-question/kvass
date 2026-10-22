@@ -13,6 +13,15 @@ pub struct GameRng(pub StdRng);
 #[derive(Resource, Default)]
 pub struct Dirty(pub u32);
 
+/// Точка появления игрока в начале каждого дня (и после обучения).
+pub const SPAWN_X: f32 = 5.5;
+pub const SPAWN_Y: f32 = 4.8;
+pub const SPAWN_ANGLE: f32 = -std::f32::consts::FRAC_PI_2;
+
+/// Сколько секунд идёт заставка «ДЕНЬ N» в начале дня: чёрный экран
+/// с надписью, затем медленно проявляется лавка.
+pub const DAY_INTRO_SECS: f32 = 3.2;
+
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Phase {
     /// Главное меню.
@@ -56,10 +65,13 @@ pub struct GameState {
     pub msg: String,
     pub msg_t: f32,
     pub day_passed: bool,
-    /// Шаг обучения (0..=6), 7 — конец.
+    /// Шаг обучения (0..=9): 8 — помыть стакан, 9 — выбросить хлам.
     pub tut_step: u8,
     /// Обучение пройдено/пропущено.
     pub tut_done: bool,
+    /// Затемнение-заставка на старте дня: >0 — экран ещё закрыт тьмой.
+    /// Убывает в `day_system`; пока идёт, день не тикает и ввод заморожен.
+    pub day_intro: f32,
     /// Откуда открыта пауза (PAUSE_FROM_*).
     pub pause_prev: u8,
     /// Выбранный пункт меню паузы.
@@ -105,6 +117,7 @@ impl Default for GameState {
             day_passed: false,
             tut_step: 0,
             tut_done: false,
+            day_intro: 0.0,
             pause_prev: PAUSE_FROM_PLAYING,
             pause_sel: 0,
             face_mood: 0,
@@ -158,6 +171,7 @@ pub fn start_day(
     state: &mut GameState,
     barrels: &mut crate::brewing::Barrels,
     dirty: &mut Dirty,
+    cam: &mut crate::raycaster::GameCam,
 ) {
     state.phase = Phase::Playing;
     state.time_left = day_len(state.day);
@@ -169,11 +183,19 @@ pub fn start_day(
         *b = crate::brewing::Barrel::new();
     }
     dirty.0 = 0;
+    // игрок всегда начинает смену за прилавком, лицом к очереди
+    cam.x = SPAWN_X;
+    cam.y = SPAWN_Y;
+    cam.angle = SPAWN_ANGLE;
     // слот «ПРОДОЛЖИТЬ» в главном меню появляется после первого запуска дня
     state.has_progress = true;
     let d = state.day;
     let n = state.norm;
+    // заставка «ДЕНЬ N»: тьма медленно рассеивается, магазин проявляется
+    state.day_intro = DAY_INTRO_SECS;
     state.notify(format!("ДЕНЬ {d} НАЧАЛСЯ! НОРМА {n} К. ОКНО СНАБЖЕНИЯ (E)"));
+    // сообщение должно быть видно уже ПОСЛЕ заставки, а не под ней
+    state.msg_t = DAY_INTRO_SECS + 2.5;
 }
 
 /// Дespawn всех покупателей (вызывается перед началом нового дня).
@@ -221,6 +243,7 @@ pub fn phase_system(
     mut barrels: ResMut<crate::brewing::Barrels>,
     customers: Query<Entity, With<Customer>>,
     mut dirty: ResMut<Dirty>,
+    mut cam: ResMut<crate::raycaster::GameCam>,
 ) {
     match state.phase {
         Phase::Menu => {
@@ -244,7 +267,7 @@ pub fn phase_system(
                 // дальше чуть плотнее, но без очереди в три ряда.
                 state.spawn_interval = (22.0 - state.day as f32 * 2.5).max(11.0);
                 clear_customers(&mut commands, &customers);
-                start_day(&mut state, &mut barrels, &mut dirty);
+                start_day(&mut state, &mut barrels, &mut dirty, &mut cam);
                 keys.clear(); // ТЗ №1
             }
         }
@@ -259,7 +282,8 @@ pub fn phase_system(
             }
         }
         Phase::Playing => {
-            if keys.just_pressed(KeyCode::Escape) {
+            // во время заставки «ДЕНЬ N» пауза не открывается
+            if state.day_intro <= 0.0 && keys.just_pressed(KeyCode::Escape) {
                 state.pause_prev = PAUSE_FROM_PLAYING;
                 state.pause_sel = 0;
                 state.phase = Phase::Paused;
@@ -343,6 +367,12 @@ pub fn day_system(
         return;
     }
     let dt = time.delta_secs();
+    // Заставка «ДЕНЬ N»: пока тьма не рассеялась, смена ещё не тикает —
+    // ни таймер, ни покупатели, ни тосты. Игрок «приходит в себя».
+    if state.day_intro > 0.0 {
+        state.day_intro = (state.day_intro - dt).max(0.0);
+        return;
+    }
     if state.msg_t > 0.0 {
         state.msg_t -= dt;
     }

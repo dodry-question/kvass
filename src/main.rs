@@ -87,7 +87,7 @@ fn window_setup() -> Window {
 }
 
 /// Идентификатор сборки — выводится в HUD для проверки версии exe (ТЗ).
-pub const BUILD_ID: &str = "BUILD 2026-10-22.26 LID-SEAM";
+pub const BUILD_ID: &str = "BUILD 2026-10-22.27 TUTORIAL-DAY";
 
 pub fn assets_root() -> std::path::PathBuf {
     let mut bases: Vec<std::path::PathBuf> = Vec::new();
@@ -196,8 +196,15 @@ fn main() {
                     // ТЗ №5 «время не стоит на месте»: в модалках (мойка,
                     // снабжение, выбор тары) мир продолжает жить — гейтится
                     // только игровой ввод. Полная пауза — ESC (Phase::Paused).
-                    player::movement.run_if(in_world).run_if(modal_closed),
-                    player::mouse_turn.run_if(in_world).run_if(modal_closed),
+                    // Во время заставки «ДЕНЬ N» игрок ещё не управляет собой.
+                    player::movement
+                        .run_if(in_world)
+                        .run_if(modal_closed)
+                        .run_if(day_intro_done),
+                    player::mouse_turn
+                        .run_if(in_world)
+                        .run_if(modal_closed)
+                        .run_if(day_intro_done),
                     grab_cursor,
                     slot_select.run_if(modal_closed),
                     menu::menu_input,
@@ -255,6 +262,11 @@ fn in_play(state: Res<GameState>) -> bool {
 /// Мир отрисовывается и в игровой день, и в обучении.
 fn in_world(state: Res<GameState>) -> bool {
     matches!(state.phase, Phase::Playing | Phase::Tutorial)
+}
+
+/// Заставка «ДЕНЬ N» закончилась — можно управлять игроком.
+fn day_intro_done(state: Res<GameState>) -> bool {
+    state.day_intro <= 0.0
 }
 
 fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
@@ -322,9 +334,9 @@ fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
 
     // Старт игрока — за прилавком, лицом к прилавку и очереди
     commands.insert_resource(GameCam {
-        x: 5.5,
-        y: 4.8,
-        angle: -std::f32::consts::FRAC_PI_2,
+        x: day_cycle::SPAWN_X,
+        y: day_cycle::SPAWN_Y,
+        angle: day_cycle::SPAWN_ANGLE,
     });
     let map = map::Map::shop();
     commands.insert_resource(Barrels::from_map(&map));

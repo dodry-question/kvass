@@ -174,9 +174,10 @@ fn start_game(
     inv: &mut crate::inventory::Inventory,
     barrels: &mut crate::brewing::Barrels,
     dirty: &mut crate::day_cycle::Dirty,
+    cam: &mut crate::raycaster::GameCam,
 ) {
     give_start_package(state, inv);
-    start_day(state, barrels, dirty);
+    start_day(state, barrels, dirty, cam);
     state.menu_view = MenuView::Main;
     state.menu_sel = 0;
 }
@@ -205,6 +206,7 @@ pub fn menu_input(
     mut inv: ResMut<crate::inventory::Inventory>,
     mut barrels: ResMut<crate::brewing::Barrels>,
     mut dirty: ResMut<crate::day_cycle::Dirty>,
+    mut cam: ResMut<crate::raycaster::GameCam>,
     mut gvol: ResMut<GlobalVolume>,
     mut keys: ResMut<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
@@ -271,7 +273,7 @@ pub fn menu_input(
                     }
                     Btn::Enter => {
                         if state.tut_done {
-                            start_game(&mut state, &mut inv, &mut barrels, &mut dirty);
+                            start_game(&mut state, &mut inv, &mut barrels, &mut dirty, &mut cam);
                         } else {
                             // в начале игры — окно с рекомендацией пройти обучение
                             state.menu_view = MenuView::Advice;
@@ -333,7 +335,7 @@ pub fn menu_input(
                 if state.menu_sel == 0 {
                     start_tutorial(&mut state, &mut inv, true);
                 } else {
-                    start_game(&mut state, &mut inv, &mut barrels, &mut dirty);
+                    start_game(&mut state, &mut inv, &mut barrels, &mut dirty, &mut cam);
                 }
             }
         }

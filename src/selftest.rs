@@ -11,7 +11,9 @@ use bevy::prelude::Vec2;
 
 use crate::brewing::{BarrelPhase, Barrels, BrewQte};
 use crate::canvas::{Canvas, CV_H, CV_W};
-use crate::day_cycle::{GameState, Phase, PAUSE_FROM_PLAYING, norm_for};
+use crate::day_cycle::{
+    DAY_INTRO_SECS, GameState, PAUSE_FROM_PLAYING, Phase, SPAWN_ANGLE, SPAWN_X, SPAWN_Y, norm_for,
+};
 use crate::font::{Font, SZ_L, SZ_M, SZ_S};
 use crate::inventory::{HandItem, Inventory};
 use crate::interact::CoolQte;
@@ -46,7 +48,7 @@ pub fn run() {
         font.line(SZ_M),
         font.cap_h(SZ_M),
         font.w("КВАСНАЯ ЛАВКА", 64),
-        font.w("ШАГ 4/8. К БОЧКЕ: E ТРИЖДЫ (СУХАРИ-ВОДА-САХАР)", SZ_M),
+        font.w("ШАГ 4/10. К БОЧКЕ: E ТРИЖДЫ (СУХАРИ-ВОДА-САХАР)", SZ_M),
     );
     let mut renderer = Renderer::new();
     let mut canvas = Canvas::new();
@@ -422,7 +424,7 @@ pub fn run() {
         ry += font.line(s) + 14;
     }
     for s in [
-        "ШАГ 5/8. НАЖИМАЙТЕ ПРОБЕЛ В ЗОНУ БЕГУНКА",
+        "ШАГ 5/10. НАЖИМАЙТЕ ПРОБЕЛ В ЗОНУ БЕГУНКА",
         "ОКНО СНАБЖЕНИЯ: [1] СУХАРИ [2] САХАР",
         "СУХАРИ КОНЧИЛИСЬ — КУПИТЕ (1) НА СКЛАДЕ",
         "ПРИЛАВОК - ОТДАТЬ КВАС ПОКУПАТЕЛЮ",
@@ -499,6 +501,90 @@ pub fn run() {
         &no_props,
     );
     snap(&canvas, Some(&world_tut), "8b_tutorial_bottom.bmp");
+
+    // --- 8c. Обучение: шаг 9/10 — после гостя грязная посуда, ведём к мойке ---
+    let sink_cam = GameCam {
+        x: 2.7,
+        y: 4.5,
+        angle: std::f32::consts::PI, // взгляд на запад: мойка (1,4)
+    };
+    renderer.render(&map, &textures, &sink_cam, 1.0);
+    renderer.present();
+    let world_sink = renderer.rgba.clone();
+    let sink_state = GameState {
+        phase: Phase::Tutorial,
+        tut_step: 8,
+        msg: "ПОСЛЕ ГОСТЯ ОСТАЛАСЬ ГРЯЗНАЯ ПОСУДА — ОТНЕСИТЕ СТАКАН В МОЙКУ".into(),
+        msg_t: 3.0,
+        ..Default::default()
+    };
+    let mut sink_inv = Inventory::default();
+    sink_inv.dirty_glasses = 1;
+    canvas.clear();
+    ui::draw_frame(
+        &mut canvas,
+        &font,
+        &sink_state,
+        &sink_inv,
+        &barrels,
+        &no_qte,
+        &no_cool,
+        &no_cust,
+        2.0,
+        &sink_cam,
+        &map,
+        false,
+        &no_modal,
+        &no_props,
+    );
+    snap(&canvas, Some(&world_sink), "8c_tutorial_sink.bmp");
+
+    // --- 8d. Обучение: шаг 10/10 — все 4 ячейки заняты хламом, несём к урне ---
+    let bin_cam = GameCam {
+        x: 3.7,
+        y: 6.4,
+        angle: std::f32::consts::PI,
+    };
+    let bin_props = [crate::sprites::WorldProp {
+        kind: crate::sprites::PropKind::TrashBin,
+        pos: Vec2::new(2.5, 6.5),
+    }];
+    renderer.render(&map, &textures, &bin_cam, 1.0);
+    renderer.draw_props(&sprites, &bin_props, &bin_cam, 1.0);
+    renderer.present();
+    let world_bin = renderer.rgba.clone();
+    let bin_state = GameState {
+        phase: Phase::Tutorial,
+        tut_step: 9,
+        msg: "РУКИ ПОЛНЫ ХЛАМА. ВЫБРОСЬТЕ ВСЁ В МУСОРКУ У СТЕНЫ (E)".into(),
+        msg_t: 3.0,
+        ..Default::default()
+    };
+    let mut bin_inv = Inventory::default();
+    bin_inv.hands = [
+        Some(HandItem::Croutons(1)),
+        Some(HandItem::Sugar(1)),
+        Some(HandItem::Empty(Vessel::Jar, 1)),
+        Some(HandItem::Empty(Vessel::Bottle, 1)),
+    ];
+    canvas.clear();
+    ui::draw_frame(
+        &mut canvas,
+        &font,
+        &bin_state,
+        &bin_inv,
+        &barrels,
+        &no_qte,
+        &no_cool,
+        &no_cust,
+        2.4,
+        &bin_cam,
+        &map,
+        false,
+        &no_modal,
+        &bin_props,
+    );
+    snap(&canvas, Some(&world_bin), "8d_tutorial_trash.bmp");
 
     // --- 9. Лист персонажей (проверка образов NPC) ---
     canvas.clear();
@@ -995,6 +1081,126 @@ pub fn run() {
         &no_props,
     );
     snap(&canvas, Some(&world_hint), "22_alarm.bmp");
+
+    // --- 23. Заставка начала дня (ТЗ: «ДЕНЬ 1»): сначала полная тьма ---
+    let spawn_cam = GameCam {
+        x: SPAWN_X,
+        y: SPAWN_Y,
+        angle: SPAWN_ANGLE,
+    };
+    renderer.render(&map, &textures, &spawn_cam, 1.0);
+    renderer.present();
+    let world_spawn = renderer.rgba.clone();
+    let intro_state = GameState {
+        phase: Phase::Playing,
+        day: 1,
+        money: 30,
+        norm: norm_for(1),
+        time_left: 240.0,
+        day_intro: DAY_INTRO_SECS,
+        ..Default::default()
+    };
+    canvas.clear();
+    ui::draw_frame(
+        &mut canvas,
+        &font,
+        &intro_state,
+        &inv,
+        &barrels,
+        &no_qte,
+        &no_cool,
+        &no_cust,
+        0.4,
+        &spawn_cam,
+        &map,
+        false,
+        &no_modal,
+        &no_props,
+    );
+    snap(&canvas, Some(&world_spawn), "23_day_intro.bmp");
+
+    // --- 23b. Та же заставка на середине: тьма и надпись гаснут вместе ---
+    let intro_half = GameState {
+        phase: Phase::Playing,
+        day: 1,
+        money: 30,
+        norm: norm_for(1),
+        time_left: 240.0,
+        day_intro: DAY_INTRO_SECS - 2.0, // ~половина проявления
+        ..Default::default()
+    };
+    canvas.clear();
+    ui::draw_frame(
+        &mut canvas,
+        &font,
+        &intro_half,
+        &inv,
+        &barrels,
+        &no_qte,
+        &no_cool,
+        &no_cust,
+        2.0,
+        &spawn_cam,
+        &map,
+        false,
+        &no_modal,
+        &no_props,
+    );
+    snap(&canvas, Some(&world_spawn), "23b_day_intro_half.bmp");
+
+    // --- 23c. Вид на стартовой точке после заставки (магазин открыт) ---
+    let after_intro = GameState {
+        phase: Phase::Playing,
+        day: 1,
+        money: 30,
+        norm: norm_for(1),
+        time_left: 240.0,
+        ..Default::default()
+    };
+    canvas.clear();
+    ui::draw_frame(
+        &mut canvas,
+        &font,
+        &after_intro,
+        &inv,
+        &barrels,
+        &no_qte,
+        &no_cool,
+        &no_cust,
+        3.4,
+        &spawn_cam,
+        &map,
+        false,
+        &no_modal,
+        &no_props,
+    );
+    snap(&canvas, Some(&world_spawn), "23c_spawn_view.bmp");
+
+    // --- 24. Логика начала дня: телепорт на спавн + заставка «ДЕНЬ N» ---
+    assert_eq!(crate::tutorial::TUT_STEPS.len(), 10, "в обучении 10 шагов");
+    assert_eq!(crate::tutorial::TUT_STEPS[8].target, (1.5, 4.5), "шаг 9 — мойка");
+    assert_eq!(crate::tutorial::TUT_STEPS[9].target, (2.5, 6.5), "шаг 10 — мусорка");
+    let mut st = GameState::default();
+    let mut day_barrels = Barrels::from_map(&map);
+    let mut day_dirty = crate::day_cycle::Dirty::default();
+    let mut day_cam = GameCam {
+        x: 0.0,
+        y: 0.0,
+        angle: 0.0,
+    };
+    crate::day_cycle::start_day(&mut st, &mut day_barrels, &mut day_dirty, &mut day_cam);
+    assert_eq!(st.phase, Phase::Playing);
+    assert_eq!(st.day_intro, DAY_INTRO_SECS);
+    assert!(
+        (day_cam.x - SPAWN_X).abs() < 1e-4
+            && (day_cam.y - SPAWN_Y).abs() < 1e-4
+            && (day_cam.angle - SPAWN_ANGLE).abs() < 1e-4,
+        "start_day телепортирует на стартовую точку"
+    );
+    println!(
+        "logic: start_day OK (phase={:?}, intro={}s, cam=({:.1},{:.1},{:.2}))",
+        st.phase, st.day_intro, day_cam.x, day_cam.y, day_cam.angle
+    );
 
     println!("selftest: кадры записаны в {}/", out.display());
 }

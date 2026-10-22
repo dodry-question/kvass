@@ -17,39 +17,49 @@ pub struct TutStep {
     pub target: (f32, f32),
 }
 
-pub const TUT_STEPS: [TutStep; 8] = [
+pub const TUT_STEPS: [TutStep; 10] = [
     TutStep {
-        text: "ШАГ 1/8. ВОЗЬМИТЕ СУХАРИ У ПОЛКИ (E)",
+        text: "ШАГ 1/10. ВОЗЬМИТЕ СУХАРИ У ПОЛКИ (E)",
         target: (3.5, 6.5),
     },
     TutStep {
-        text: "ШАГ 2/8. НАБЕРИТЕ ВОДУ У КОЛОНКИ (E)",
+        text: "ШАГ 2/10. НАБЕРИТЕ ВОДУ У КОЛОНКИ (E)",
         target: (9.5, 6.5),
     },
     TutStep {
-        text: "ШАГ 3/8. ВОЗЬМИТЕ САХАР С ИЗЮМОМ (E)",
+        text: "ШАГ 3/10. ВОЗЬМИТЕ САХАР С ИЗЮМОМ (E)",
         target: (5.5, 6.5),
     },
     TutStep {
-        text: "ШАГ 4/8. К БОЧКЕ: E ТРИЖДЫ (СУХАРИ-ВОДА-САХАР)",
+        text: "ШАГ 4/10. К БОЧКЕ: E ТРИЖДЫ (СУХАРИ-ВОДА-САХАР)",
         target: (1.5, 5.5),
     },
     // ТЗ №2: отдельный шаг на мини-игру ускорения брожения.
     TutStep {
-        text: "ШАГ 5/8. НАЖИМАЙТЕ ПРОБЕЛ В ЗОНУ БЕГУНКА",
+        text: "ШАГ 5/10. НАЖИМАЙТЕ ПРОБЕЛ В ЗОНУ БЕГУНКА",
         target: (1.5, 5.5),
     },
     TutStep {
-        text: "ШАГ 6/8. ВОЗЬМИТЕ СТАКАН СО СТЕЛЛАЖА (E)",
+        text: "ШАГ 6/10. ВОЗЬМИТЕ СТАКАН СО СТЕЛЛАЖА (E)",
         target: (6.5, 6.5),
     },
     TutStep {
-        text: "ШАГ 7/8. КВАС ГОТОВ: ДЕРЖИТЕ E У БОЧКИ",
+        text: "ШАГ 7/10. КВАС ГОТОВ: ДЕРЖИТЕ E У БОЧКИ",
         target: (1.5, 5.5),
     },
     TutStep {
-        text: "ШАГ 8/8. ОТДАЙТЕ КВАС БАБУШКЕ (E)",
+        text: "ШАГ 8/10. ОТДАЙТЕ КВАС БАБУШКЕ (E)",
         target: (9.5, 2.7), // на шаге 8 цель — сама бабушка у прилавка
+    },
+    // После гостя появляется грязная посуда: ведём к мойке.
+    TutStep {
+        text: "ШАГ 9/10. ПОСЛЕ ГОСТЯ ГРЯЗНАЯ ПОСУДА — ПОМОЙТЕ СТАКАН (E)",
+        target: (1.5, 4.5), // мойка (1,4)
+    },
+    // И сразу — мусорка: руки заполняются хламом, его надо выбросить.
+    TutStep {
+        text: "ШАГ 10/10. ВЕСЬ ХЛАМ — В МУСОРКУ: ВЫБРОСЬТЕ (E)",
+        target: (2.5, 6.5), // урна у южной стены
     },
 ];
 
@@ -64,6 +74,7 @@ pub fn tutorial_system(
     customers: Query<(Entity, &Customer)>,
     mut commands: Commands,
     mut dirty: ResMut<crate::day_cycle::Dirty>,
+    mut cam: ResMut<crate::raycaster::GameCam>,
 ) {
     if state.phase != Phase::Tutorial {
         return;
@@ -82,7 +93,15 @@ pub fn tutorial_system(
             state.tut_step = 5;
             state.notify("ТАК ДЕРЖАТЬ!".into());
         } else {
-            finish(&mut state, &mut inv, &mut barrels, &customers, &mut commands, &mut dirty);
+            finish(
+                &mut state,
+                &mut inv,
+                &mut barrels,
+                &customers,
+                &mut commands,
+                &mut dirty,
+                &mut cam,
+            );
         }
         return;
     }
@@ -146,16 +165,51 @@ pub fn tutorial_system(
             .iter()
             .any(|h| matches!(h, Some(HandItem::Full(_, _, _)))),
         7 => customers.iter().any(|(_, c)| c.served),
+        // шаг 9: грязный стакан после бабушки отмыт в мойке
+        8 => inv.dirty_glasses == 0,
+        // шаг 10: весь учебный хлам выброшен в мусорку
+        9 => inv.is_empty(),
         _ => false,
     };
     if done {
-        if state.tut_step >= 7 {
-            finish(&mut state, &mut inv, &mut barrels, &customers, &mut commands, &mut dirty);
+        if state.tut_step >= 9 {
+            finish(
+                &mut state,
+                &mut inv,
+                &mut barrels,
+                &customers,
+                &mut commands,
+                &mut dirty,
+                &mut cam,
+            );
         } else {
             state.tut_step += 1;
-            state.notify("ТАК ДЕРЖАТЬ!".into());
+            match state.tut_step {
+                8 => state.notify(
+                    "ПОСЛЕ ГОСТЯ ОСТАЛАСЬ ГРЯЗНАЯ ПОСУДА — ОТНЕСИТЕ СТАКАН В МОЙКУ".into(),
+                ),
+                9 => {
+                    fill_trash_practice(&mut inv);
+                    state.notify(
+                        "РУКИ ПОЛНЫ ХЛАМА. ВЫБРОСЬТЕ ВСЁ В МУСОРКУ У СТЕНЫ (E)".into(),
+                    );
+                }
+                _ => state.notify("ТАК ДЕРЖАТЬ!".into()),
+            }
         }
     }
+}
+
+/// Учебная практика с мусоркой: заполняем все четыре ячейки разным хламом,
+/// чтобы игрок по одному выбросил его и запомнил, где урна.
+fn fill_trash_practice(inv: &mut Inventory) {
+    inv.hands = [
+        Some(HandItem::Croutons(1)),
+        Some(HandItem::Sugar(1)),
+        Some(HandItem::Empty(Vessel::Jar, 1)),
+        Some(HandItem::Empty(Vessel::Bottle, 1)),
+    ];
+    inv.selected = 0;
 }
 
 fn finish(
@@ -165,6 +219,7 @@ fn finish(
     customers: &Query<(Entity, &Customer)>,
     commands: &mut Commands,
     dirty: &mut crate::day_cycle::Dirty,
+    cam: &mut crate::raycaster::GameCam,
 ) {
     state.tut_done = true;
     state.tut_step = 0;
@@ -175,7 +230,9 @@ fn finish(
         // обучение — вход в основной цикл: день стартует сразу
         give_start_package(state, inv);
         // ТЗ №3: день начинается сразу, без экрана закупки.
-        start_day(state, barrels, dirty);
+        // start_day сам вернёт игрока на стартовую точку и включит
+        // заставку «ДЕНЬ 1» с медленным проявлением магазина.
+        start_day(state, barrels, dirty, cam);
     } else {
         // обучение из меню — отдельная секция: возвращаемся в главное меню
         state.phase = Phase::Menu;
