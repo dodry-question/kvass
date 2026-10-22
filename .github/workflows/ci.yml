@@ -20,12 +20,16 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # Линковка тестового бинаря с debuginfo — самая дорогая часть прогона.
+  # Отключаем debuginfo только для тестового профиля (на локальную сборку не влияет).
+  CARGO_PROFILE_TEST_DEBUG: "0"
 
 jobs:
   check:
     name: Check (Linux)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Холодный прогон занял ~22 мин (почти весь прежний лимит в 30 мин).
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@v4
