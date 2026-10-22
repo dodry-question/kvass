@@ -617,7 +617,7 @@ pub fn footsteps(
         bank.step_t = 0.38;
         bank.step_toggle = !bank.step_toggle;
         let name = if bank.step_toggle { "step1" } else { "step2" };
-        play_sfx(&mut commands, &bank, name, 0.4);
+        play_sfx(&mut commands, &bank, name, 0.3);
     }
 }
 

@@ -1,6 +1,7 @@
 //! CPU-рейкастер (DDA по Лодеву, как Wolf3D) в буфер 320x200.
 //! Рендер по индексам палитры + Doom-colormap (16 ступеней) + дизеринг Байера.
 
+use crate::brewing::{BarrelPhase, Barrels};
 use crate::map::{Map, Tile};
 use crate::palette::{build_colormap, light_band, BAYER4, PALETTE, NUM_LIGHTS};
 use crate::textures::{TexId, Textures, TEX_SIZE};
@@ -37,6 +38,9 @@ struct LowHit {
     perp: f32,
     cx: i32,
     cy: i32,
+    /// Текстуры выбираются по фазе бочки (готово/переброд/испорчено).
+    face_tex: TexId,
+    top_tex: Option<TexId>,
     /// Верх/низ фасада на экране.
     start: i32,
     end: i32,
@@ -79,6 +83,18 @@ fn low_frac(t: Tile) -> f32 {
     }
 }
 
+/// Фасад и крышка бочки по её фазе. Остальные тайлы берут свои текстуры.
+fn barrel_textures(phase: BarrelPhase) -> (TexId, Option<TexId>) {
+    match phase {
+        BarrelPhase::Ready(_) => (TexId::BarrelReady, Some(TexId::BarrelTopReady)),
+        BarrelPhase::Overripe(_) => (TexId::BarrelOverripe, Some(TexId::BarrelTopOverripe)),
+        BarrelPhase::Ruined => (TexId::BarrelRuined, Some(TexId::BarrelTopRuined)),
+        BarrelPhase::Empty | BarrelPhase::Ferment(_) => {
+            (TexId::Barrel, Some(TexId::BarrelTop))
+        }
+    }
+}
+
 impl Renderer {
     pub fn new() -> Self {
         Self {
@@ -93,6 +109,18 @@ impl Renderer {
     }
 
     pub fn render(&mut self, map: &Map, tex: &Textures, cam: &GameCam, flicker: f32) {
+        self.render_with_barrels(map, tex, cam, flicker, None);
+    }
+
+    /// Как `render`, но знает фазы бочек и выбирает их текстуры.
+    pub fn render_with_barrels(
+        &mut self,
+        map: &Map,
+        tex: &Textures,
+        cam: &GameCam,
+        flicker: f32,
+        barrels: Option<&Barrels>,
+    ) {
         let mut idx = std::mem::take(&mut self.indices);
         idx.fill(0);
         for v in self.zlow_hits.iter_mut() {
@@ -188,12 +216,22 @@ impl Renderer {
                     })
                     .max(0.05);
                     if is_low(t) {
+                        let (face_tex, top_tex) = if t == Tile::Barrel {
+                            barrels
+                                .and_then(|bs| bs.map.get(&(map_x, map_y)))
+                                .map(|b| barrel_textures(b.phase))
+                                .unwrap_or((TexId::Barrel, Some(TexId::BarrelTop)))
+                        } else {
+                            (t.tex().unwrap_or(TexId::TileWall), t.top_tex())
+                        };
                         lows.push(LowHit {
                             tile: t,
                             side,
                             perp,
                             cx: map_x,
                             cy: map_y,
+                            face_tex,
+                            top_tex,
                             start: 0,
                             end: 0,
                             lid_top: 0,
@@ -315,7 +353,7 @@ impl Renderer {
                 if (l.side == 0 && rdx > 0.0) || (l.side == 1 && rdy < 0.0) {
                     tex_x = TEX_SIZE - tex_x - 1;
                 }
-                let base_tex = l.tile.tex().unwrap_or(TexId::TileWall);
+                let base_tex = l.face_tex;
                 let dark = if l.side == 1 { 0.8 } else { 1.0 };
                 let ex = (x as f32 - SCREEN_W as f32 / 2.0).abs() / (SCREEN_W as f32 / 2.0);
                 // фасад
@@ -337,7 +375,7 @@ impl Renderer {
                 // сэмплим текстуру по мировым координатам, поэтому соседние
                 // клетки ряда дают непрерывную столешницу без швов.
                 if l.lid_top < start {
-                    let top = l.tile.top_tex().unwrap_or(base_tex);
+                    let top = l.top_tex.unwrap_or(base_tex);
                     for y in l.lid_top..start {
                         let dy = y - HORIZON;
                         if dy <= 0 {

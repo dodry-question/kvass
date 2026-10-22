@@ -87,7 +87,7 @@ fn window_setup() -> Window {
 }
 
 /// Идентификатор сборки — выводится в HUD для проверки версии exe (ТЗ).
-pub const BUILD_ID: &str = "BUILD 2026-10-22.28 MAP-MUSIC";
+pub const BUILD_ID: &str = "BUILD 2: ПЕРВЫЙ ПЕРЕБРОД";
 
 pub fn assets_root() -> std::path::PathBuf {
     let mut bases: Vec<std::path::PathBuf> = Vec::new();
@@ -212,13 +212,15 @@ fn main() {
                     day_cycle::day_system,
                     tutorial::tutorial_system.run_if(modal_closed),
                     brewing::barrel_update.run_if(in_world),
-                    customer::customer_update.run_if(in_world),
-                    enemies::enemies_spawn,
-                    enemies::officials_fine.run_if(in_play),
-                    enemies::hooligan_spawn.run_if(in_play),
-                    enemies::hooligan_behavior.run_if(in_play),
+                    brewing::brew_hints.run_if(in_world).run_if(modal_closed),
+                    customer::customer_update.run_if(in_world).run_if(no_overbrew_freeze),
+                    enemies::enemies_spawn.run_if(no_overbrew_freeze),
+                    enemies::officials_fine.run_if(in_play).run_if(no_overbrew_freeze),
+                    enemies::hooligan_spawn.run_if(in_play).run_if(no_overbrew_freeze),
+                    enemies::hooligan_behavior.run_if(in_play).run_if(no_overbrew_freeze),
                     interact::interact.run_if(modal_closed),
                     interact::fill_hold.run_if(modal_closed),
+                    brewing::first_overbrew_event.run_if(in_play),
                     interact::brew_qte.run_if(modal_closed),
                     interact::cool_qte.run_if(modal_closed),
                 )
@@ -242,7 +244,7 @@ fn main() {
             (
                 // модалки и доставка живут поверх замороженного мира
                 modals::modal_input,
-                modals::supply_tick,
+                modals::supply_tick.run_if(no_overbrew_freeze),
                 render_frame,
                 fit_screen,
             ),
@@ -262,6 +264,12 @@ fn in_play(state: Res<GameState>) -> bool {
 /// Мир отрисовывается и в игровой день, и в обучении.
 fn in_world(state: Res<GameState>) -> bool {
     matches!(state.phase, Phase::Playing | Phase::Tutorial)
+}
+
+/// Пока идёт первый переброд, день и покупатели замирают; игрок при этом
+/// свободно ходит, берёт ведро и поливает бочку.
+fn no_overbrew_freeze(event: Res<brewing::FirstOverbrew>) -> bool {
+    !event.freeze()
 }
 
 /// Заставка «ДЕНЬ N» закончилась — можно управлять игроком.
@@ -346,6 +354,8 @@ fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
     commands.insert_resource(day_cycle::Dirty::default());
     commands.insert_resource(interact::FillState::default());
     commands.insert_resource(brewing::BrewQte::default());
+    commands.insert_resource(brewing::BrewHints::default());
+    commands.insert_resource(brewing::FirstOverbrew::default());
     commands.insert_resource(GameRng(StdRng::seed_from_u64(777)));
     commands.insert_resource(World {
         textures: Textures::generate(),
@@ -403,7 +413,8 @@ fn render_frame(
     barrels: Res<Barrels>,
     qte: Res<brewing::BrewQte>,
     cool: Res<interact::CoolQte>,
-    modal: Res<modals::Modals>,
+    // Пара объединена, чтобы render_frame не превысил лимит параметров Bevy.
+    ui_extra: (Res<brewing::FirstOverbrew>, Res<modals::Modals>),
     customers: Query<&Customer>,
     props: Query<&sprites::WorldProp>,
     mut world: ResMut<World>,
@@ -411,6 +422,8 @@ fn render_frame(
     mut images: ResMut<Assets<Image>>,
     screen: Res<ScreenImages>,
 ) {
+    let overbrew = &*ui_extra.0;
+    let modal = &*ui_extra.1;
     // мерцание люминесцентных ламп
     let t = time.elapsed_secs();
     let base = 0.94 + 0.04 * (t * 6.3).sin() + 0.02 * (t * 13.7).sin();
@@ -428,7 +441,7 @@ fn render_frame(
             flicker,
             ..
         } = &mut *world;
-        renderer.render(&map, textures, &cam, *flicker);
+        renderer.render_with_barrels(&map, textures, &cam, *flicker, Some(&barrels));
         let list: Vec<_> = customers.iter().map(|c| (c.pos, c.kind)).collect();
         renderer.draw_sprites(sprites, &list, &cam, *flicker);
         // статичные предметы (ТЗ №5: урна-мусорка) — тот же billboard-пайплайн
@@ -459,7 +472,7 @@ fn render_frame(
                 KeyCode::ArrowUp,
                 KeyCode::ArrowDown,
             ]);
-        ui::draw_frame(
+        ui::draw_frame_with_overbrew(
             &mut ui_canvas,
             font,
             &state,
@@ -472,8 +485,9 @@ fn render_frame(
             &cam,
             &map,
             moving,
-            &modal,
+            modal,
             &prop_list,
+            Some(overbrew),
         );
     }
 

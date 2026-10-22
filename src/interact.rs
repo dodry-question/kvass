@@ -3,7 +3,9 @@
 use bevy::prelude::*;
 use rand::prelude::*;
 
-use crate::brewing::{BarrelPhase, Barrels};
+use crate::brewing::{
+    BarrelPhase, Barrels, FirstOverbrew, FirstOverbrewStage, PCT_OVERRIPE,
+};
 use crate::customer::{CustState, Customer};
 use crate::day_cycle::{GameState, GameRng, Phase};
 use crate::inventory::{HandItem, Inventory};
@@ -69,6 +71,7 @@ pub fn interact(
     mut state: ResMut<GameState>,
     mut modal: ResMut<Modals>,
     mut cool: ResMut<CoolQte>,
+    mut overbrew: ResMut<FirstOverbrew>,
     mut customers: Query<(Entity, &mut Customer)>,
     props: Query<&crate::sprites::WorldProp>,
     mut game_rng: ResMut<GameRng>,
@@ -195,7 +198,30 @@ pub fn interact(
                     }
                 }
                 BarrelPhase::Overripe(p) => {
-                    // ТЗ №9: переброд можно спасти ведром ледяной воды.
+                    // Первый переброд — сценарный: ведро льётся сразу, без
+                    // мини-игры. Это награда за то, что игрок успел добежать.
+                    if overbrew.saving()
+                        && overbrew.barrel == (tx, ty)
+                        && inv.has_bucket()
+                    {
+                        let np = (p - 25.0).max(crate::brewing::PCT_READY);
+                        b.phase = if np < PCT_OVERRIPE {
+                            BarrelPhase::Ready(np)
+                        } else {
+                            BarrelPhase::Overripe(np)
+                        };
+                        inv.drain_bucket();
+                        overbrew.stage = FirstOverbrewStage::Done;
+                        crate::audio::play_sfx(&mut commands, &bank, "ding", 0.7);
+                        state.notify(
+                            "ВОДА ЗАЛИТА! КВАС СПАСЁН - ВРЕМЯ СНОВА ИДЁТ".into(),
+                        );
+                        state.msg_t = 4.0;
+                        state.face_set(1, 1.5);
+                        return;
+                    }
+                    // ТЗ №9: обычный переброд спасают ведром ледяной воды
+                    // через мини-игру.
                     if inv.has_bucket() {
                         if cool.active && cool.barrel == Some((tx, ty)) {
                             cool.reset();
@@ -212,6 +238,10 @@ pub fn interact(
                                 p as i32
                             ));
                         }
+                    } else if overbrew.freeze() {
+                        state.notify(
+                            "НУЖНО ВЕДРО ВОДЫ! КОЛОНКА - НАБРАТЬ (E), ПОТОМ К БОЧКЕ".into(),
+                        );
                     } else {
                         state.notify(format!(
                             "ПЕРЕБРОД {}%! НУЖНО ВЕДРО ЛЕДЯНОЙ ВОДЫ — КОЛОНКА (E)",
@@ -495,6 +525,7 @@ pub fn brew_qte(
 
     let (tx, ty) = front_tile(&cam);
     let at_barrel = map.get(tx, ty) == Tile::Barrel;
+    let phase = barrels.map.get(&(tx, ty)).map(|b| b.phase);
     let boostable = at_barrel
         && barrels
             .map
@@ -502,6 +533,15 @@ pub fn brew_qte(
             .map(|b| b.boostable())
             .unwrap_or(false);
     if !boostable {
+        // Готовая бочка: ускорять больше нельзя, иначе одно случайное
+        // нажатие ПРОБЕЛА у 118% незаметно отправляло бы квас в переброд.
+        if at_barrel && keys.just_pressed(KeyCode::Space) {
+            if let Some(BarrelPhase::Ready(_)) = phase {
+                state.notify(
+                    "КВАС ГОТОВ - УСКОРЯТЬ НЕЛЬЗЯ. ДЕРЖИ E, ЧТОБЫ РАЗЛИТЬ".into(),
+                );
+            }
+        }
         // отошёл от бочки или она сменила фазу — полоска прячется
         qte.reset();
         return;

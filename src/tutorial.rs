@@ -44,7 +44,7 @@ pub const TUT_STEPS: [TutStep; 10] = [
         target: (7.5, 8.5),
     },
     TutStep {
-        text: "ШАГ 7/10. КВАС ГОТОВ: ДЕРЖИТЕ E У БОЧКИ",
+        text: "ШАГ 7/10. КВАС ГОТОВ: ДЕРЖИТЕ E (УСКОРЯТЬ НЕЛЬЗЯ)",
         target: (6.5, 8.5),
     },
     TutStep {

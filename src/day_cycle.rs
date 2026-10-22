@@ -106,7 +106,7 @@ impl Default for GameState {
             money: 30,
             day_earned: 0,
             norm: 100,
-            time_left: 240.0,
+            time_left: 300.0,
             phase: Phase::Menu,
             fine: 0,
             fine_reason: String::new(),
@@ -205,8 +205,10 @@ pub fn clear_customers(commands: &mut Commands, customers: &Query<Entity, With<C
     }
 }
 
+/// Длительность смены: 5 минут на первый день плюс 30 секунд за каждый
+/// следующий. Раньше было 4 минуты — добавили минуту запаса на день.
 pub fn day_len(day: u32) -> f32 {
-    210.0 + 30.0 * day as f32
+    270.0 + 30.0 * day as f32
 }
 
 pub fn norm_for(day: u32) -> i32 {
@@ -362,6 +364,7 @@ pub fn day_system(
     mut game_rng: ResMut<GameRng>,
     mut commands: Commands,
     mut modals: ResMut<crate::modals::Modals>,
+    overbrew: Res<crate::brewing::FirstOverbrew>,
 ) {
     if state.phase != Phase::Playing {
         return;
@@ -385,6 +388,11 @@ pub fn day_system(
     // ТЗ №5: тревога (бандиты) пульсирует ~3 сек и гаснет.
     if state.alarm_t > 0.0 {
         state.alarm_t = (state.alarm_t - dt).max(0.0);
+    }
+    // Первый переброд: часы смены и поток покупателей стоят, пока игрок
+    // не принесёт воду (или не вымоет бочку после провала).
+    if overbrew.freeze() {
+        return;
     }
     state.time_left -= dt;
     if state.time_left <= 0.0 {

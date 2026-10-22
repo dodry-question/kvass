@@ -9,7 +9,9 @@ use std::path::Path;
 
 use bevy::prelude::Vec2;
 
-use crate::brewing::{BarrelPhase, Barrels, BrewQte};
+use crate::brewing::{
+    Barrel, BarrelPhase, Barrels, BrewQte, FirstOverbrew, FirstOverbrewStage,
+};
 use crate::canvas::{Canvas, CV_H, CV_W};
 use crate::day_cycle::{
     DAY_INTRO_SECS, GameState, PAUSE_FROM_PLAYING, Phase, SPAWN_ANGLE, SPAWN_X, SPAWN_Y, norm_for,
@@ -684,6 +686,142 @@ pub fn run() {
     renderer.present();
     write_bmp_world(&out.join("13_counter_row.bmp"), &renderer.rgba);
 
+    // --- 13b. Внешний вид бочки по фазам: бродит / готово / переброд /
+    //          испорчена. Одна камера, меняется только фаза. ---
+    let bp = keys[0];
+    let barrel_cam = GameCam {
+        x: bp.0 as f32 + 0.5,
+        y: bp.1 as f32 - 1.45,
+        angle: std::f32::consts::FRAC_PI_2,
+    };
+    let mut look_barrels = Barrels::from_map(&map);
+    for (name, phase) in [
+        ("13b_barrel_ferment", BarrelPhase::Ferment(50.0)),
+        ("13c_barrel_ready", BarrelPhase::Ready(112.0)),
+        ("13d_barrel_overripe", BarrelPhase::Overripe(132.0)),
+        ("13e_barrel_ruined", BarrelPhase::Ruined),
+    ] {
+        if let Some(b) = look_barrels.map.get_mut(&bp) {
+            b.phase = phase;
+        }
+        renderer.render_with_barrels(
+            &map,
+            &textures,
+            &barrel_cam,
+            1.0,
+            Some(&look_barrels),
+        );
+        renderer.present();
+        write_bmp_world(&out.join(format!("{name}.bmp")), &renderer.rgba);
+    }
+
+    // --- 13f. Экран первого переброда: остановленное время, акцентные
+    //          цифры и стрелка к колонке (ведра ещё нет). ---
+    let event = FirstOverbrew {
+        stage: FirstOverbrewStage::NeedBucket,
+        barrel: bp,
+    };
+    let event_state = GameState {
+        phase: Phase::Playing,
+        day: 1,
+        time_left: 180.0,
+        ..Default::default()
+    };
+    let event_inv = Inventory::default();
+    let mut event_barrels = Barrels::from_map(&map);
+    if let Some(b) = event_barrels.map.get_mut(&bp) {
+        b.phase = BarrelPhase::Overripe(126.0);
+    }
+    renderer.render_with_barrels(&map, &textures, &barrel_cam, 1.0, Some(&event_barrels));
+    renderer.present();
+    let world_event = renderer.rgba.clone();
+    canvas.clear();
+    ui::draw_frame_with_overbrew(
+        &mut canvas,
+        &font,
+        &event_state,
+        &event_inv,
+        &event_barrels,
+        &no_qte,
+        &no_cool,
+        &no_cust,
+        6.0,
+        &barrel_cam,
+        &map,
+        false,
+        &no_modal,
+        &no_props,
+        Some(&event),
+    );
+    snap(&canvas, Some(&world_event), "13f_overbrew_event.bmp");
+
+    // --- 13g. Ведро уже в руках: цель — бочка, сценарий ждёт E. ---
+    let pour_event = FirstOverbrew {
+        stage: FirstOverbrewStage::PourWater,
+        barrel: bp,
+    };
+    let pour_inv = Inventory {
+        hands: [Some(HandItem::Bucket), None, None, None],
+        selected: 0,
+        ..Default::default()
+    };
+    if let Some(b) = event_barrels.map.get_mut(&bp) {
+        b.phase = BarrelPhase::Overripe(126.0);
+    }
+    renderer.render_with_barrels(&map, &textures, &barrel_cam, 1.0, Some(&event_barrels));
+    renderer.present();
+    let world_pour = renderer.rgba.clone();
+    canvas.clear();
+    ui::draw_frame_with_overbrew(
+        &mut canvas,
+        &font,
+        &event_state,
+        &pour_inv,
+        &event_barrels,
+        &no_qte,
+        &no_cool,
+        &no_cust,
+        6.0,
+        &barrel_cam,
+        &map,
+        false,
+        &no_modal,
+        &no_props,
+        Some(&pour_event),
+    );
+    snap(&canvas, Some(&world_pour), "13g_overbrew_pour.bmp");
+
+    // --- 13h. Провал: бочка испорчена, время ждёт мытья. ---
+    let failed_event = FirstOverbrew {
+        stage: FirstOverbrewStage::FailedWash,
+        barrel: bp,
+    };
+    if let Some(b) = event_barrels.map.get_mut(&bp) {
+        b.phase = BarrelPhase::Ruined;
+    }
+    renderer.render_with_barrels(&map, &textures, &barrel_cam, 1.0, Some(&event_barrels));
+    renderer.present();
+    let world_failed = renderer.rgba.clone();
+    canvas.clear();
+    ui::draw_frame_with_overbrew(
+        &mut canvas,
+        &font,
+        &event_state,
+        &event_inv,
+        &event_barrels,
+        &no_qte,
+        &no_cool,
+        &no_cust,
+        6.0,
+        &barrel_cam,
+        &map,
+        false,
+        &no_modal,
+        &no_props,
+        Some(&failed_event),
+    );
+    snap(&canvas, Some(&world_failed), "13h_overbrew_failed.bmp");
+
     // --- 14. Полоска ускорения брожения (мини-игра на ПРОБЕЛЕ) ---
     let qte = BrewQte {
         active: true,
@@ -1220,6 +1358,32 @@ pub fn run() {
     assert_eq!(crate::tutorial::TUT_STEPS.len(), 10, "в обучении 10 шагов");
     assert_eq!(crate::tutorial::TUT_STEPS[8].target, (8.5, 5.5), "шаг 9 — мойка");
     assert_eq!(crate::tutorial::TUT_STEPS[9].target, (5.5, 8.3), "шаг 10 — мусорка");
+
+    // Регрессия «ловушки QTE»: после 100% ускорять бочку нельзя.
+    let mut probe = Barrel::new();
+    probe.phase = BarrelPhase::Ferment(50.0);
+    assert!(probe.boostable(), "бродящую бочку можно ускорять");
+    probe.phase = BarrelPhase::Ready(110.0);
+    assert!(
+        !probe.boostable(),
+        "готовую бочку нельзя ускорять: иначе 118% + QTE = переброд"
+    );
+    probe.phase = BarrelPhase::Overripe(130.0);
+    assert!(!probe.boostable(), "переброд ускорять нельзя");
+    assert!(
+        crate::brewing::FIRST_OVERBREW_RATE < crate::brewing::DANGER_RATE,
+        "первый переброд медленнее обычного"
+    );
+    let mut first = FirstOverbrew::default();
+    assert!(!first.freeze(), "до события время идёт нормально");
+    first.stage = FirstOverbrewStage::NeedBucket;
+    assert!(first.freeze(), "без ведра время стоит");
+    first.stage = FirstOverbrewStage::PourWater;
+    assert!(first.freeze(), "с ведром время ещё стоит до полива");
+    first.stage = FirstOverbrewStage::FailedWash;
+    assert!(first.freeze(), "после провала время стоит до мытья");
+    first.stage = FirstOverbrewStage::Done;
+    assert!(!first.freeze(), "после спасения/мытья время идёт");
     let mut st = GameState::default();
     let mut day_barrels = Barrels::from_map(&map);
     let mut day_dirty = crate::day_cycle::Dirty::default();

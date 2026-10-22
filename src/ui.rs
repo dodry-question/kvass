@@ -6,7 +6,10 @@
 //! интерфейс рисуется на прозрачном канвасе поверх: текст плотнопиксельный,
 //! читаемый, у каждой надписи своя подложка — ничего не налезает на текстуры.
 
-use crate::brewing::{BarrelPhase, Barrels, BrewQte, BARREL_PORTIONS, QTE_BONUS, seconds_to_next};
+use crate::brewing::{
+    BarrelPhase, Barrels, BrewQte, FirstOverbrew, FirstOverbrewStage, FIRST_OVERBREW_RATE,
+    QTE_BONUS, seconds_to_next,
+};
 use crate::canvas::{Canvas, CV_H, CV_W};
 use crate::day_cycle::{GameState, Phase, day_len};
 use crate::font::{Font, SZ_H, SZ_L, SZ_M, SZ_S, SZ_T, SZ_XL};
@@ -76,6 +79,8 @@ pub struct CustView {
     pub queued: bool,
 }
 
+/// Совместимый вход для самотеста и старых вызовов: без сценария
+/// первого переброда.
 #[allow(clippy::too_many_arguments)]
 pub fn draw_frame(
     canvas: &mut Canvas,
@@ -91,8 +96,32 @@ pub fn draw_frame(
     map: &Map,
     moving: bool,
     modal: &crate::modals::Modals,
+    props: &[crate::sprites::WorldProp],
+) {
+    draw_frame_with_overbrew(
+        canvas, font, state, inv, barrels, qte, cool, customers, t, cam, map, moving, modal, props,
+        None,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn draw_frame_with_overbrew(
+    canvas: &mut Canvas,
+    font: &Font,
+    state: &GameState,
+    inv: &Inventory,
+    barrels: &Barrels,
+    qte: &BrewQte,
+    cool: &crate::interact::CoolQte,
+    customers: &[CustView],
+    t: f32,
+    cam: &GameCam,
+    map: &Map,
+    moving: bool,
+    modal: &crate::modals::Modals,
     // ТЗ №5: статичные предметы-спрайты (урна) — подсказка по близости.
     props: &[crate::sprites::WorldProp],
+    overbrew: Option<&FirstOverbrew>,
 ) {
     match state.phase {
         Phase::Menu => draw_menu(canvas, font, state, t),
@@ -102,6 +131,7 @@ pub fn draw_frame(
             let bubbles = bubble_layout(customers, font, cam);
             draw_hud(
                 canvas, font, state, inv, barrels, qte, cool, t, map, cam, &bubbles, false, props,
+                overbrew,
             );
             canvas.dim(150);
             draw_pause(canvas, font, state);
@@ -117,12 +147,19 @@ pub fn draw_frame(
             let hud_busy = qte.active || cool.active || modal.is_open();
             draw_hud(
                 canvas, font, state, inv, barrels, qte, cool, t, map, cam, &bubbles, hud_busy,
-                props,
+                props, overbrew,
             );
             draw_bubbles(canvas, font, &bubbles);
             // точка-«мушка» в центре: видна только в мире и не мешает модалкам
             if !modal.is_open() {
                 draw_aim_dot(canvas);
+            }
+            // Первый переброд: поверх HUD, но под модалкой. День уже стоит,
+            // поэтому это не мешает игроку бежать за водой.
+            if let Some(ev) = overbrew {
+                if ev.freeze() && !modal.is_open() {
+                    draw_overbrew_event(canvas, font, inv, barrels, cam, map, t, ev);
+                }
             }
             if state.phase == Phase::Tutorial && !modal.is_open() {
                 // Внизу по умолчанию; на время мини-игр (полоски QTE или
@@ -452,12 +489,19 @@ fn draw_hud(
     hud_busy: bool,
     // ТЗ №5: предметы-спрайты (урна-мусорка) — подсказка по близости.
     props: &[crate::sprites::WorldProp],
+    overbrew: Option<&FirstOverbrew>,
 ) {
     // --- Таблички бочек (верхний левый угол) ---
     let mut keys: Vec<(i32, i32)> = barrels.map.keys().copied().collect();
     keys.sort();
     for (i, k) in keys.iter().enumerate() {
         let b = &barrels.map[k];
+        let emergency = overbrew.is_some_and(|e| e.freeze() && e.barrel == *k);
+        let secs = if emergency && matches!(b.phase, BarrelPhase::Overripe(_)) {
+            seconds_to_next(b) / FIRST_OVERBREW_RATE
+        } else {
+            seconds_to_next(b)
+        };
         let (led, text): ([u8; 3], String) = match b.phase {
             BarrelPhase::Empty => {
                 let s = match b.step {
@@ -469,18 +513,36 @@ fn draw_hud(
             }
             BarrelPhase::Ferment(p) => (col::KVASS_L, format!("Б{} БРОДИТ {}%", i + 1, p as i32)),
             BarrelPhase::Ready(p) => (
-                if blink(t, 4.0) { col::LAMP } else { col::KVASS_L },
-                format!(
-                    "Б{} ГОТОВА {}/{}, {:.0}С",
-                    i + 1,
-                    b.portions,
-                    BARREL_PORTIONS,
-                    seconds_to_next(b)
-                ),
+                if p >= 120.0 {
+                    if blink(t, 6.0) { col::RED } else { col::LAMP }
+                } else {
+                    col::LAMP
+                },
+                if p >= 120.0 {
+                    format!(
+                        "Б{} ГОТОВА {}% - ПЕРЕБРОД ЧЕРЕЗ {:.0}С! РАЗЛИВАЙ",
+                        i + 1,
+                        p as i32,
+                        secs
+                    )
+                } else {
+                    format!(
+                        "Б{} ГОТОВА {}% | {} ПОРЦ. | ДО 125% {:.0}С",
+                        i + 1,
+                        p as i32,
+                        b.portions,
+                        secs
+                    )
+                },
             ),
             BarrelPhase::Overripe(p) => (
-                if blink(t, 6.0) { col::LAMP } else { col::RED },
-                format!("Б{} ПЕРЕБРОД {}% {:.0}С!", i + 1, p as i32, seconds_to_next(b)),
+                if emergency || blink(t, 6.0) { col::RED } else { col::LAMP },
+                format!(
+                    "Б{} ПЕРЕБРОД {}% - ДО ПОРЧИ {:.0}С",
+                    i + 1,
+                    p as i32,
+                    secs
+                ),
             ),
             BarrelPhase::Ruined => (
                 col::RED,
@@ -494,15 +556,43 @@ fn draw_hud(
         let x = 8;
         let y = 8 + i as i32 * 46;
         let w = font.w(&text, SZ_S) + 56;
-        if bubbles.iter().any(|b| b.hits(x, y, w, 40)) {
-            continue; // облачко важнее
+        if !emergency && bubbles.iter().any(|b| b.hits(x, y, w, 40)) {
+            continue; // облачко важнее, но тревогу первого переброда не прячем
         }
         panel(c, x, y, w, 40);
         c.rect(x + 10, y + 15, 5, 5, led, 255);
-        font.draw(c, x + 26, y + 9, &text, SZ_S, col::WHITE, 255);
-        // тревожная рамка: последние проценты брожения
-        if matches!(b.phase, BarrelPhase::Ferment(p) if p >= 90.0) && blink(t, 6.0) {
-            c.frame(x - 3, y - 3, w + 6, 46, col::LAMP, 255);
+        if emergency {
+            // Акцент на цифрах: процент и секунды — ярким цветом, текст — белым.
+            if let BarrelPhase::Overripe(p) = b.phase {
+                let accent = if blink(t, 8.0) { col::RED } else { col::LAMP };
+                let prefix = format!("Б{} ПЕРЕБРОД ", i + 1);
+                let pct = format!("{}%", p as i32);
+                let middle = " - ДО ПОРЧИ ";
+                let tail = format!("{:.0}С", secs);
+                let mut xx = x + 26;
+                font.draw(c, xx, y + 9, &prefix, SZ_S, col::WHITE, 255);
+                xx += font.w(&prefix, SZ_S);
+                font.draw(c, xx, y + 9, &pct, SZ_S, accent, 255);
+                xx += font.w(&pct, SZ_S);
+                font.draw(c, xx, y + 9, middle, SZ_S, col::WHITE, 255);
+                xx += font.w(middle, SZ_S);
+                font.draw(c, xx, y + 9, &tail, SZ_S, accent, 255);
+            } else {
+                font.draw(c, x + 26, y + 9, &text, SZ_S, col::WHITE, 255);
+            }
+        } else {
+            font.draw(c, x + 26, y + 9, &text, SZ_S, col::WHITE, 255);
+        }
+        // тревожная рамка: последние проценты брожения / первый переброд
+        let danger_ready = matches!(b.phase, BarrelPhase::Ready(p) if p >= 120.0);
+        let close_ready = matches!(b.phase, BarrelPhase::Ferment(p) if p >= 90.0);
+        if (emergency || danger_ready || close_ready) && blink(t, 6.0) {
+            let col = if emergency || danger_ready {
+                col::RED
+            } else {
+                col::LAMP
+            };
+            c.frame(x - 3, y - 3, w + 6, 46, col, 255);
         }
     }
 
@@ -548,7 +638,11 @@ fn draw_hud(
 
     // --- «Нужна посуда» (верх по центру, мигает) ---
     // ТЗ №4: банки/бутылки не покупаются — при нуле склада виновата грязь.
-    if inv.total_stock() == 0 && state.phase == Phase::Playing && blink(t, 2.0) {
+    if inv.total_stock() == 0
+        && state.phase == Phase::Playing
+        && !overbrew.is_some_and(|e| e.freeze())
+        && blink(t, 2.0)
+    {
         let warn = if inv.total_dirty() > 0 {
             "ПОСУДА ВСЯ ГРЯЗНАЯ! ИДИТЕ НА МОЙКУ (E)"
         } else {
@@ -910,7 +1004,24 @@ fn draw_tutorial(
         Some(ts.target)
     };
     let Some((tx, ty)) = target else { return };
+    draw_target_marker(c, font, cam, t, (tx, ty), col::LAMP, 8, None);
+}
 
+/// Мигающий маркер-стрелка над мировой целью. Общий для обучения и
+/// сценария первого переброда. `hint_y` — где рисовать «повернитесь»,
+/// чтобы на экране события не налезать на HUD.
+fn draw_target_marker(
+    c: &mut Canvas,
+    font: &Font,
+    cam: &GameCam,
+    t: f32,
+    target: (f32, f32),
+    color: [u8; 3],
+    hint_y: i32,
+    // Прямоугольник панели, которую маркер не должен перекрывать.
+    avoid: Option<(i32, i32, i32, i32)>,
+) {
+    let (tx, ty) = target;
     let dir_x = cam.angle.cos();
     let dir_y = cam.angle.sin();
     let plane_x = -dir_y * 0.66;
@@ -925,9 +1036,9 @@ fn draw_tutorial(
             let hint = "ПОВЕРНИТЕСЬ - ЦЕЛЬ ЗА СПИНОЙ!";
             let w = font.w(hint, SZ_M) + 32;
             let x = (CV_W - w) / 2;
-            c.rect(x, 8, w, 44, col::RED_D, 255);
-            c.frame(x, 8, w, 44, col::BLACK, 255);
-            font.draw(c, x + 16, 17, hint, SZ_M, col::LAMP, 255);
+            c.rect(x, hint_y, w, 44, col::RED_D, 255);
+            c.frame(x, hint_y, w, 44, col::BLACK, 255);
+            font.draw(c, x + 16, hint_y + 9, hint, SZ_M, col::LAMP, 255);
         }
         return;
     }
@@ -936,7 +1047,15 @@ fn draw_tutorial(
     let feet = ((HORIZON as f32 + (0.5 * SCREEN_H as f32) / py) * 2.0) as i32;
     let top = feet - sprite_h - 24;
     let cx = screen_x.clamp(40, CV_W - 40);
-    let cy = top.clamp(32, 440);
+    let mut cy = top.clamp(32, 440);
+    if let Some((ax, ay, aw, ah)) = avoid {
+        let overlaps = cx + 16 > ax && cx - 16 < ax + aw && cy + 24 > ay && cy < ay + ah;
+        if overlaps {
+            // Маркер попал на текст панели — ставим его сразу под панелью,
+            // над самой бочкой; стрелка всё равно указывает вниз на цель.
+            cy = (ay + ah + 4).clamp(32, 440);
+        }
+    }
     if blink(t, 4.0) {
         for row in 0..24 {
             let half = (21 - row) / 2;
@@ -946,11 +1065,134 @@ fn draw_tutorial(
             let half2 = ((21 - row) - 2) / 2;
             if half2 > 0 && row < 20 {
                 for dx in -half2..=half2 {
-                    c.blend(cx + dx, cy + row, col::LAMP, 255);
+                    c.blend(cx + dx, cy + row, color, 255);
                 }
             }
         }
     }
+}
+
+/// Сценарий первого переброда: тревожная плашка, акцентные цифры
+/// и стрелка к текущей цели (колонка → бочка, либо бочка для мойки).
+fn draw_overbrew_event(
+    c: &mut Canvas,
+    font: &Font,
+    inv: &Inventory,
+    barrels: &Barrels,
+    cam: &GameCam,
+    map: &Map,
+    t: f32,
+    ev: &FirstOverbrew,
+) {
+    let Some(b) = barrels.map.get(&ev.barrel) else {
+        return;
+    };
+    let failed = ev.stage == FirstOverbrewStage::FailedWash;
+    let p = match b.phase {
+        BarrelPhase::Overripe(p) => p,
+        _ => 150.0,
+    };
+    let secs = if matches!(b.phase, BarrelPhase::Overripe(_)) {
+        seconds_to_next(b) / FIRST_OVERBREW_RATE
+    } else {
+        0.0
+    };
+    let accent = if blink(t, 8.0) { col::RED } else { col::LAMP };
+
+    // Панель сдвигаем ниже HUD бочек и блока дня; «повернитесь» — между
+    // ними, чтобы верхняя строка бочки и день не перекрывались.
+    let rows = barrels.map.len() as i32;
+    let hint_y = 8 + rows.max(1) * 46 + 4;
+    let w = 880;
+    let h = 184;
+    let x = (CV_W - w) / 2;
+    let y = (hint_y + 52).max(150);
+    panel(c, x, y, w, h);
+    red_plate(c, x + 8, y + 8, w - 16, 42);
+    let title = if failed {
+        "НЕ УСПЕЛИ! КВАС ИСПОРТИЛСЯ"
+    } else {
+        "ПЕРЕБРОД! ВРЕМЯ ОСТАНОВЛЕНО"
+    };
+    let tw = font.w(title, SZ_L);
+    font.draw(c, x + (w - tw) / 2, y + 16, title, SZ_L, col::LAMP, 255);
+
+    let line1 = if failed {
+        "ВЫ НЕ УСПЕЛИ ПОЛИТЬ КВАС ВОДОЙ — ОН ИСПОРТИЛСЯ."
+    } else {
+        "КВАС ИСПОРТИТСЯ, ЕСЛИ СРОЧНО НЕ ПОЛИТЬ ЕГО ВОДОЙ."
+    };
+    let lw = font.w(line1, SZ_M);
+    font.draw(c, x + (w - lw) / 2, y + 62, line1, SZ_M, col::WHITE, 255);
+
+    // Главный акцент: проценты и секунды до порчи.
+    let left = "БРОЖЕНИЕ ";
+    let pct = format!("{}%", p as i32);
+    let mid = if failed {
+        " — БОЧКА ИСПОРЧЕНА"
+    } else {
+        " - ДО ПОРЧИ "
+    };
+    let tail = if failed { String::new() } else { format!("{:.0}С", secs) };
+    let total = format!("{left}{pct}{mid}{tail}");
+    let mut xx = x + (w - font.w(&total, SZ_M)) / 2;
+    font.draw(c, xx, y + 90, left, SZ_M, col::WHITE, 255);
+    xx += font.w(left, SZ_M);
+    font.draw(c, xx, y + 90, &pct, SZ_M, accent, 255);
+    xx += font.w(&pct, SZ_M);
+    font.draw(c, xx, y + 90, mid, SZ_M, col::WHITE, 255);
+    xx += font.w(mid, SZ_M);
+    if !tail.is_empty() {
+        font.draw(c, xx, y + 90, &tail, SZ_M, accent, 255);
+    }
+
+    let (objective, target) = if failed {
+        (
+            "ПОМОЙТЕ БОЧКУ: ПОДОЙДИТЕ И ДЕРЖИТЕ E".to_string(),
+            (ev.barrel.0 as f32 + 0.5, ev.barrel.1 as f32 + 0.5),
+        )
+    } else if inv.has_bucket() {
+        (
+            "ПОЛИТЕ БОЧКУ: ПОДОЙДИТЕ И НАЖМИТЕ E".to_string(),
+            (ev.barrel.0 as f32 + 0.5, ev.barrel.1 as f32 + 0.5),
+        )
+    } else {
+        let hands_full = inv.hands.iter().all(|h| h.is_some());
+        let text = if hands_full {
+            "РУКИ ЗАНЯТЫ — ОСВОБОДИТЕ СЛОТ, ЗАТЕМ НАБЕРИТЕ ВЕДРО (E)"
+        } else {
+            "НАБЕРИТЕ ВЕДРО ВОДЫ У КОЛОНКИ (E), ЗАТЕМ К БОЧКЕ"
+        };
+        (
+            text.to_string(),
+            find_tile_center(map, Tile::Water).unwrap_or((16.5, 6.5)),
+        )
+    };
+    let ow = font.w(&objective, SZ_M);
+    font.draw(c, x + (w - ow) / 2, y + 124, &objective, SZ_M, col::LAMP, 255);
+    let hint = if failed {
+        "ВРЕМЯ ПОЙДЁТ, КОГДА БОЧКА СТАНЕТ ЧИСТОЙ"
+    } else if inv.has_bucket() {
+        "ЦЕЛЬ: БОЧКА"
+    } else {
+        "ЦЕЛЬ: КОЛОНКА С ВОДОЙ"
+    };
+    let hw = font.w(hint, SZ_S);
+    font.draw(c, x + (w - hw) / 2, y + 152, hint, SZ_S, col::TILE, 255);
+    c.frame(x - 2, y - 2, w + 4, h + 4, if blink(t, 5.0) { col::RED } else { col::LAMP }, 255);
+    draw_target_marker(c, font, cam, t, target, accent, hint_y, Some((x, y, w, h)));
+}
+
+/// Центр первого тайла нужного типа (для стрелки к колонке).
+fn find_tile_center(map: &Map, tile: Tile) -> Option<(f32, f32)> {
+    for y in 0..crate::map::MAP_H {
+        for x in 0..crate::map::MAP_W {
+            if map.get(x as i32, y as i32) == tile {
+                return Some((x as f32 + 0.5, y as f32 + 0.5));
+            }
+        }
+    }
+    None
 }
 
 // =================== Экраны ===================

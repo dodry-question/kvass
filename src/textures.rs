@@ -44,9 +44,21 @@ pub enum TexId {
     CounterTop = 16,
     /// Крышка бочки (вид сверху): дерево, обручи и пробка.
     BarrelTop = 17,
+    /// Готовая бочка: пена и золотая крышка.
+    BarrelReady = 18,
+    /// Перебродившая бочка: красная пена и тёмное дерево.
+    BarrelOverripe = 19,
+    /// Испорченная бочка: зелёная плесень.
+    BarrelRuined = 20,
+    /// Крышка готовой бочки: пена.
+    BarrelTopReady = 21,
+    /// Крышка перебродившей бочки: красная жижа.
+    BarrelTopOverripe = 22,
+    /// Крышка испорченной бочки: плесень.
+    BarrelTopRuined = 23,
 }
 
-pub const NUM_TEX: usize = 18;
+pub const NUM_TEX: usize = 24;
 
 pub struct Textures {
     /// data[tex][y*64+x] = РёРЅРґРµРєСЃ РїР°Р»РёС‚СЂС‹
@@ -78,6 +90,28 @@ impl Textures {
         gen_sink(&mut data[TexId::Sink as usize]);
         gen_counter_top(&mut data[TexId::CounterTop as usize]);
         gen_barrel_top(&mut data[TexId::BarrelTop as usize]);
+
+        // Варианты бочки по фазе: готово / переброд / испорчено.
+        let barrel = data[TexId::Barrel as usize].clone();
+        for (id, mood) in [
+            (TexId::BarrelReady, BarrelMood::Ready),
+            (TexId::BarrelOverripe, BarrelMood::Overripe),
+            (TexId::BarrelRuined, BarrelMood::Ruined),
+        ] {
+            let mut v = barrel.clone();
+            recolor_barrel(&mut v, mood);
+            data[id as usize] = v;
+        }
+        let top = data[TexId::BarrelTop as usize].clone();
+        for (id, mood) in [
+            (TexId::BarrelTopReady, BarrelMood::Ready),
+            (TexId::BarrelTopOverripe, BarrelMood::Overripe),
+            (TexId::BarrelTopRuined, BarrelMood::Ruined),
+        ] {
+            let mut v = top.clone();
+            recolor_barrel_top(&mut v, mood);
+            data[id as usize] = v;
+        }
         Self { data }
     }
 
@@ -202,6 +236,196 @@ fn gen_barrel(t: &mut Vec<u8>) {
     for x in 25..39 {
         px(t, x, 40, idx::METAL_DARK);
         px(t, x, 41, idx::METAL);
+    }
+}
+
+#[derive(Clone, Copy)]
+enum BarrelMood {
+    Ready,
+    Overripe,
+    Ruined,
+}
+
+/// Перекраска фасада бочки: пена сверху, тёмное дерево/красный переброд
+/// и зелёная плесень. Силуэт и обручи не меняются, чтобы бочка оставалась
+/// узнаваемой, но состояние читалось с одного взгляда.
+fn recolor_barrel(t: &mut [u8], mood: BarrelMood) {
+    let seed = match mood {
+        BarrelMood::Ready => 31,
+        BarrelMood::Overripe => 32,
+        BarrelMood::Ruined => 33,
+    };
+    let mut rng = StdRng::seed_from_u64(seed);
+
+    for c in t.iter_mut() {
+        if matches!(*c, idx::WOOD_LIGHT | idx::WOOD_DARK | idx::SHADOW) {
+            *c = match mood {
+                BarrelMood::Ready => *c,
+                BarrelMood::Overripe => match *c {
+                    idx::WOOD_LIGHT => idx::KVASS_DARK,
+                    idx::WOOD_DARK => idx::RED_DARK,
+                    _ => idx::SHADOW,
+                },
+                BarrelMood::Ruined => match *c {
+                    idx::WOOD_LIGHT => idx::TILE_DARK,
+                    idx::WOOD_DARK => idx::SHADOW,
+                    _ => idx::BLACK,
+                },
+            };
+        }
+    }
+
+    // Готовую бочку видно издалека по золотым обручам; у переброда и
+    // плесени металл наоборот темнеет.
+    for c in t.iter_mut() {
+        match (mood, *c) {
+            (BarrelMood::Ready, idx::WHITE | idx::METAL) => *c = idx::KVASS_LIGHT,
+            (BarrelMood::Ready, idx::METAL_DARK) => *c = idx::KVASS_MID,
+            (BarrelMood::Overripe, idx::WHITE) => *c = idx::RED,
+            (BarrelMood::Overripe, idx::METAL) => *c = idx::KVASS_DARK,
+            (BarrelMood::Overripe, idx::METAL_DARK) => *c = idx::BLACK,
+            (BarrelMood::Ruined, idx::WHITE) => *c = idx::GREEN,
+            (BarrelMood::Ruined, idx::METAL) => *c = idx::TILE_DARK,
+            (BarrelMood::Ruined, idx::METAL_DARK) => *c = idx::BLACK,
+            _ => {}
+        }
+    }
+
+    let (foam_a, foam_b, foam_c) = match mood {
+        BarrelMood::Ready => (idx::WHITE, idx::KVASS_LIGHT, idx::PLASTER),
+        BarrelMood::Overripe => (idx::RED_DARK, idx::RED, idx::BLACK),
+        BarrelMood::Ruined => (idx::LEAVES, idx::GREEN, idx::BLACK),
+    };
+
+    // Пена/жижа, переливающаяся через верхний край. Полоса заметная:
+    // готовую бочку должно быть видно с игровой дистанции.
+    for x in 0..TEX_SIZE {
+        let wave = 9.0
+            + (x as f32 * 0.33).sin() * 2.4
+            + (x as f32 * 0.81).cos() * 1.6;
+        let wave = wave.max(4.0) as usize;
+        for y in 0..wave.min(TEX_SIZE) {
+            let c = match (x + y * 3) % 9 {
+                0 => foam_b,
+                1 => foam_c,
+                _ => foam_a,
+            };
+            t[y * TEX_SIZE + x] = c;
+        }
+        // потёки вниз: у готовой — кремовая пена, у остальных — жижа/плесень
+        if x % 7 == 0 {
+            let len = 6 + rng.random_range(0..8);
+            for y in wave..(wave + len).min(TEX_SIZE) {
+                t[y * TEX_SIZE + x] = foam_b;
+            }
+        }
+    }
+
+    // Пятна/плесень ниже кромки, только по дереву.
+    if !matches!(mood, BarrelMood::Ready) {
+        for _ in 0..110 {
+            let x = rng.random_range(0..TEX_SIZE);
+            let y = rng.random_range(10..TEX_SIZE);
+            let c = t[y * TEX_SIZE + x];
+            if matches!(
+                c,
+                idx::WOOD_LIGHT | idx::WOOD_DARK | idx::SHADOW | idx::KVASS_DARK | idx::TILE_DARK
+            ) {
+                t[y * TEX_SIZE + x] = if rng.random::<f32>() < 0.35 {
+                    foam_b
+                } else {
+                    foam_c
+                };
+            }
+        }
+    }
+}
+
+/// Крышка бочки по фазе: белая пена, красная жижа или зелёная плесень.
+fn recolor_barrel_top(t: &mut [u8], mood: BarrelMood) {
+    let seed = match mood {
+        BarrelMood::Ready => 41,
+        BarrelMood::Overripe => 42,
+        BarrelMood::Ruined => 43,
+    };
+    let mut rng = StdRng::seed_from_u64(seed);
+    let c0 = TEX_SIZE as f32 / 2.0;
+    for y in 0..TEX_SIZE {
+        for x in 0..TEX_SIZE {
+            let dx = (x as f32 + 0.5 - c0) / c0;
+            let dy = (y as f32 + 0.5 - c0) / c0;
+            let r = (dx * dx + dy * dy).sqrt();
+            // Обруч и центральная пробка остаются металлическими.
+            if r > 0.84 || r < 0.12 {
+                continue;
+            }
+            let i = y * TEX_SIZE + x;
+            t[i] = match mood {
+                BarrelMood::Ready => {
+                    if rng.random::<f32>() < 0.78 {
+                        if rng.random::<f32>() < 0.18 {
+                            idx::KVASS_LIGHT
+                        } else {
+                            idx::WHITE
+                        }
+                    } else {
+                        idx::PLASTER
+                    }
+                }
+                BarrelMood::Overripe => {
+                    if rng.random::<f32>() < 0.22 {
+                        idx::RED
+                    } else if rng.random::<f32>() < 0.45 {
+                        idx::BLACK
+                    } else {
+                        idx::RED_DARK
+                    }
+                }
+                BarrelMood::Ruined => {
+                    if rng.random::<f32>() < 0.28 {
+                        idx::GREEN
+                    } else if rng.random::<f32>() < 0.35 {
+                        idx::LEAVES
+                    } else if rng.random::<f32>() < 0.5 {
+                        idx::BLACK
+                    } else {
+                        idx::TILE_DARK
+                    }
+                }
+            };
+        }
+    }
+    // Пара крупных пузырей на поверхности.
+    for _ in 0..12 {
+        let x = rng.random_range(10..TEX_SIZE - 10);
+        let y = rng.random_range(10..TEX_SIZE - 10);
+        let dx = (x as f32 + 0.5 - c0) / c0;
+        let dy = (y as f32 + 0.5 - c0) / c0;
+        if (dx * dx + dy * dy).sqrt() > 0.8 {
+            continue;
+        }
+        let c = match mood {
+            BarrelMood::Ready => idx::WHITE,
+            BarrelMood::Overripe => idx::RED,
+            BarrelMood::Ruined => idx::GREEN,
+        };
+        t[y * TEX_SIZE + x] = c;
+        if x + 1 < TEX_SIZE {
+            t[y * TEX_SIZE + x + 1] = c;
+        }
+    }
+    for c in t.iter_mut() {
+        match (mood, *c) {
+            (BarrelMood::Ready, idx::WHITE | idx::METAL) => *c = idx::KVASS_LIGHT,
+            (BarrelMood::Ready, idx::METAL_DARK) => *c = idx::KVASS_MID,
+            (BarrelMood::Overripe, idx::WHITE) => *c = idx::RED,
+            (BarrelMood::Overripe, idx::METAL) => *c = idx::KVASS_DARK,
+            (BarrelMood::Overripe, idx::METAL_DARK) => *c = idx::BLACK,
+            (BarrelMood::Ruined, idx::WHITE) => *c = idx::GREEN,
+            (BarrelMood::Ruined, idx::METAL) => *c = idx::TILE_DARK,
+            (BarrelMood::Ruined, idx::METAL_DARK) => *c = idx::BLACK,
+            _ => {}
+        }
     }
 }
 

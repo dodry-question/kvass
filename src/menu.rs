@@ -343,6 +343,7 @@ pub fn menu_input(
         MenuView::Settings => {
             let mut delta = 0i32;
             let mut hover: Option<u8> = None;
+            let mut back_clicked = false;
             if let Some((mx, my)) = cur {
                 if inside(SET_MINUS, mx, my) || inside(SET_PLUS, mx, my) {
                     hover = Some(0);
@@ -351,6 +352,7 @@ pub fn menu_input(
                     }
                 } else if inside(SET_BACK, mx, my) {
                     hover = Some(1);
+                    back_clicked = clicked;
                 }
             }
             if let Some(i) = hover {
@@ -380,7 +382,8 @@ pub fn menu_input(
                     sfx(&mut commands, &bank, "ding", 0.9);
                 }
             }
-            let back = keys.just_pressed(KeyCode::Escape)
+            let back = back_clicked
+                || keys.just_pressed(KeyCode::Escape)
                 || (state.menu_sel == 1
                     && (keys.just_pressed(KeyCode::Enter)
                         || keys.just_pressed(KeyCode::NumpadEnter)
