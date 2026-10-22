@@ -33,10 +33,22 @@ jobs:
           New-Item -ItemType Directory -Force out | Out-Null
           Copy-Item target/release/kvass-shop.exe "out/${{ github.ref_name }}.exe"
 
+      - name: Build title
+        id: meta
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          if ($tag -match '^LS(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})') {
+            $title = "Build $($Matches[1])-$($Matches[2])-$($Matches[3]) $($Matches[4]):$($Matches[5])"
+          } else {
+            $title = "Build " + (Get-Date -Format 'yyyy-MM-dd HH:mm')
+          }
+          "title=$title" >> $env:GITHUB_OUTPUT
+
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
           files: out/${{ github.ref_name }}.exe
-          name: ${{ github.ref_name }}
+          name: ${{ steps.meta.outputs.title }}
           tag_name: ${{ github.ref_name }}
           generate_release_notes: true
