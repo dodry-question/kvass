@@ -342,10 +342,13 @@ impl Renderer {
                 // фронта — она же задаёт линию обрезки спрайтов (zlow_top)
                 let band_top = lid_band_top;
                 let span = (start_raw - band_top).max(1);
+                // Крышка — своя текстура «вид сверху». Фасадную брать нельзя:
+                // её рисунок (касса, ленты) растягивался в мутные полосы.
+                let top = hit_tile.top_tex().unwrap_or(base_tex);
                 for y in band_top..start {
                     let ty2 = (((y - band_top) as f32 * TEX_SIZE as f32 / span as f32) as usize)
                         .min(TEX_SIZE - 1);
-                    let c = tex.texel(base_tex, tex_x, ty2);
+                    let c = tex.texel(top, tex_x, ty2);
                     let mut bright = (1.0 - perp / MAX_DIST).max(0.25) * flicker * dark * 1.12;
                     if y & 1 == 1 {
                         bright *= 0.8;

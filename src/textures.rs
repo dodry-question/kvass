@@ -40,9 +40,13 @@ pub enum TexId {
     Supply = 14,
     /// РњРѕР№РєР° РїРѕСЃСѓРґС‹: РєР°С„РµР»СЊ, СЂР°РєРѕРІРёРЅР°, РєСЂР°РЅ Рё СЃСѓС€РёР»РєР° СЃРѕ СЃС‚Р°РєР°РЅР°РјРё.
     Sink = 15,
+    /// Крышка прилавка (вид сверху): доска вдоль длины и кромки.
+    CounterTop = 16,
+    /// Крышка бочки (вид сверху): дерево, обручи и пробка.
+    BarrelTop = 17,
 }
 
-pub const NUM_TEX: usize = 16;
+pub const NUM_TEX: usize = 18;
 
 pub struct Textures {
     /// data[tex][y*64+x] = РёРЅРґРµРєСЃ РїР°Р»РёС‚СЂС‹
@@ -72,6 +76,8 @@ impl Textures {
         gen_water(&mut data[TexId::WaterTap as usize]);
         gen_supply(&mut data[TexId::Supply as usize]);
         gen_sink(&mut data[TexId::Sink as usize]);
+        gen_counter_top(&mut data[TexId::CounterTop as usize]);
+        gen_barrel_top(&mut data[TexId::BarrelTop as usize]);
         Self { data }
     }
 
@@ -645,6 +651,64 @@ fn gen_sink(t: &mut Vec<u8>) {
                     };
                 }
             }
+            px(t, x, y, c);
+        }
+    }
+}
+
+/// Крышка прилавка: доски вдоль длины и светлая передняя кромка.
+/// В этой текстуре U идёт вдоль прилавка, V — в глубину.
+fn gen_counter_top(t: &mut Vec<u8>) {
+    let mut rng = StdRng::seed_from_u64(21);
+    for y in 0..TEX_SIZE {
+        for x in 0..TEX_SIZE {
+            let c = if y < 3 {
+                // передняя кромка стыкуется с верхом фасада
+                noisy(&mut rng, idx::PLASTER, idx::WOOD_LIGHT, 0.18)
+            } else if y >= TEX_SIZE - 4 {
+                // задняя кромка в тени
+                noisy(&mut rng, idx::WOOD_DARK, idx::SHADOW, 0.18)
+            } else if y % 11 == 0 {
+                // шов доски — линия вдоль длины прилавка
+                idx::WOOD_DARK
+            } else if (y * 7 + x / 16) % 13 == 0 {
+                // лёгкая продольная текстура дерева
+                idx::WOOD_DARK
+            } else {
+                noisy(&mut rng, idx::WOOD_LIGHT, idx::WOOD_DARK, 0.07)
+            };
+            px(t, x, y, c);
+        }
+    }
+}
+
+/// Крышка бочки: круглое дерево с обручем и пробкой, углы — в тени.
+fn gen_barrel_top(t: &mut Vec<u8>) {
+    let mut rng = StdRng::seed_from_u64(22);
+    let c0 = TEX_SIZE as f32 / 2.0;
+    for y in 0..TEX_SIZE {
+        for x in 0..TEX_SIZE {
+            let dx = (x as f32 + 0.5 - c0) / c0;
+            let dy = (y as f32 + 0.5 - c0) / c0;
+            let r = (dx * dx + dy * dy).sqrt();
+            let c = if r > 0.96 {
+                idx::SHADOW
+            } else if r > 0.88 {
+                idx::METAL_DARK
+            } else if r > 0.84 {
+                idx::METAL
+            } else if r < 0.10 {
+                idx::BLACK
+            } else {
+                // радиальные стыки клёпок
+                let a = dy.atan2(dx);
+                let spoke = ((a * 4.0 / std::f32::consts::PI) % 1.0).abs();
+                if spoke < 0.05 || spoke > 0.95 {
+                    idx::WOOD_DARK
+                } else {
+                    noisy(&mut rng, idx::WOOD_LIGHT, idx::WOOD_DARK, 0.10)
+                }
+            };
             px(t, x, y, c);
         }
     }

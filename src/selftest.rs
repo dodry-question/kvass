@@ -554,10 +554,10 @@ pub fn run() {
     renderer.present();
     write_bmp_world(&out.join("10_spriteonly.bmp"), &renderer.rgba);
 
-    // --- 11. Камера на отступе от прилавка (ТЗ №7) ---
+    // --- 11. Камера вплотную к прилавку (регрессия крышки/кассы) ---
     let close_cam = GameCam {
         x: 9.5,
-        y: 4.7,
+        y: 4.5,
         angle: -std::f32::consts::FRAC_PI_2,
     };
     renderer.render(&map, &textures, &close_cam, 1.0);

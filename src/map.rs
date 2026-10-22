@@ -57,6 +57,17 @@ impl Tile {
             Tile::Floor => return None,
         })
     }
+
+    /// Текстура верхней грани низкой мебели (её видно сверху под углом).
+    /// Фасадная текстура для крышки не годится: растянутая по глубине,
+    /// она превращала рисунок кассы в мутные полосы.
+    pub fn top_tex(self) -> Option<TexId> {
+        match self {
+            Tile::Counter => Some(TexId::CounterTop),
+            Tile::Barrel => Some(TexId::BarrelTop),
+            _ => None,
+        }
+    }
 }
 
 #[derive(bevy::prelude::Resource, Clone)]
