@@ -480,6 +480,26 @@ pub fn run() {
     );
     snap(&canvas, Some(&world_tut), "8_tutorial.bmp");
 
+    // --- 8b. Обучение без мини-игры: плашка внизу, обзор свободен ---
+    canvas.clear();
+    ui::draw_frame(
+        &mut canvas,
+        &font,
+        &state,
+        &inv,
+        &barrels,
+        &no_qte,
+        &no_cool,
+        &tut_cust,
+        1.5,
+        &cam,
+        &map,
+        false,
+        &no_modal,
+        &no_props,
+    );
+    snap(&canvas, Some(&world_tut), "8b_tutorial_bottom.bmp");
+
     // --- 9. Лист персонажей (проверка образов NPC) ---
     canvas.clear();
     canvas.rect(0, 0, CV_W, CV_H, [36, 30, 22], 255);

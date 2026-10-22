@@ -53,10 +53,13 @@ pub const BAR_Y: i32 = 672;
 pub const MSG_Y: i32 = 628;
 /// Полоска подсказки «что перед вами».
 pub const HINT_Y: i32 = 580;
-/// Панель шага обучения (ТЗ №6/№5): опущена к низу — над полосками
-/// мини-игр (они с 506), прицел и центр экрана свободны.
-/// Панель высотой 88: 406..494, до полосок 12 px запаса, наложений нет.
-pub const TUT_Y: i32 = 406;
+/// Панель шага обучения в обычном режиме — ВНИЗУ, над строкой
+/// уведомлений: центр обзора и прицел свободны, панель не мешает.
+/// Высота 88: 520..608, до уведомления (628) 20 px запаса.
+pub const TUT_Y: i32 = 520;
+/// На время мини-игр (полоски занимают 506..602, мойка бочки — 566..610)
+/// панель поднимается выше них, чтобы мини-игра оставалась видимой.
+pub const TUT_Y_UP: i32 = 406;
 
 fn blink(t: f32, hz: f32) -> bool {
     (t * hz) as i32 % 2 == 0
@@ -117,8 +120,11 @@ pub fn draw_frame(
                 props,
             );
             draw_bubbles(canvas, font, &bubbles);
-            if state.phase == Phase::Tutorial {
-                draw_tutorial(canvas, font, state, customers, cam, t);
+            if state.phase == Phase::Tutorial && !modal.is_open() {
+                // Внизу по умолчанию; на время мини-игр (полоски QTE или
+                // мойка бочки) поднимаем выше них, чтобы не закрывать игру.
+                let raised = qte.active || cool.active || state.wash_bar > 0.0;
+                draw_tutorial(canvas, font, state, customers, cam, t, raised);
             }
             // ТЗ №5: «тревога» — бандиты на подходе: экран плавно пульсирует
             // красным2-3 раза (затухающая вспышка), чтобы сразу бежать к кассе.
@@ -845,6 +851,7 @@ fn draw_tutorial(
     customers: &[CustView],
     cam: &GameCam,
     t: f32,
+    raised: bool,
 ) {
     let step = state.tut_step as usize;
     let Some(ts) = crate::tutorial::TUT_STEPS.get(step) else {
@@ -858,7 +865,7 @@ fn draw_tutorial(
     let w = (font.w(ts.text, ts_size).max(skip_w) + 72).max(520);
     let h = if locked { 70 } else { 88 };
     let x = ((CV_W - w) / 2).max(8);
-    let y = TUT_Y;
+    let y = if raised { TUT_Y_UP } else { TUT_Y };
     panel(c, x, y, w, h);
     font.draw(c, x + 24, y + 14, ts.text, ts_size, col::LAMP, 255);
     if locked {

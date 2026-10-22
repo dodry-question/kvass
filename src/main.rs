@@ -91,7 +91,7 @@ fn window_setup() -> Window {
 }
 
 /// Идентификатор сборки — выводится в HUD для проверки версии exe (ТЗ).
-pub const BUILD_ID: &str = "BUILD 2026-10-22.18 GAME-MUSIC";
+pub const BUILD_ID: &str = "BUILD 2026-10-22.19 TUT-BOTTOM";
 
 pub fn assets_root() -> std::path::PathBuf {
     let mut bases: Vec<std::path::PathBuf> = Vec::new();
