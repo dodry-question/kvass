@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "dist/**"
+      - "selftest_out/**"
+      - "**/*.md"
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: Check (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Bevy system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config \
+            libasound2-dev libudev-dev \
+            libx11-dev libxcursor-dev libxi-dev libxrandr-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: linux-check
+
+      - name: cargo check
+        run: cargo check --locked --all-targets
+
+      - name: cargo test
+        run: cargo test --locked
