@@ -200,6 +200,13 @@ pub fn customer_update(
         if let Ok((_, mut c)) = q.get_mut(e) {
             c.spot = nspot;
             c.path = path_to_spot(nspot);
+            // ТЗ №6: очередь реально ПОДХОДИТ вперёд. Если человек уже стоял
+            // в очереди, переводим его в Entering — иначе менялся только
+            // номер места, а сам он оставался на старом (очередь «баговалась»:
+            // первый ушёл, а второй стоял на своём месте).
+            if c.state == CustState::Queued {
+                c.state = CustState::Entering;
+            }
         }
     }
 }

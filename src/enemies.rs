@@ -123,6 +123,17 @@ pub fn hooligan_spawn(
     }
     // ТЗ №5: бандиты приходят реже — интервал между визитами ~55 с.
     *cooldown = 55.0;
+    // ТЗ №6: не встаём на уже занятое место в очереди (иначе два человека
+    // визуально стоят в одной точке). Бандит встаёт в свободный хвост.
+    let mut taken = [false; QUEUE_SPOTS.len()];
+    for c in customers.iter() {
+        if c.spot < taken.len() {
+            taken[c.spot] = true;
+        }
+    }
+    let spot = (0..QUEUE_SPOTS.len())
+        .find(|&i| !taken[i])
+        .unwrap_or(QUEUE_SPOTS.len() - 1);
     // ТЗ №5: атмосферная тревога — красная пульсация экрана + низкий гул.
     state.alarm_t = 3.0;
     state.notify("БАНДИТЫ НА ПОДХОДЕ! БЕГИТЕ К КАССЕ (E) - ЗАПЛАТИТЕ ДАНЬ".into());
@@ -132,12 +143,12 @@ pub fn hooligan_spawn(
         order: crate::sprites::Vessel::Glass,
         state: CustState::Entering,
         pos: crate::customer::DOOR,
-        path: VecDeque::from([Vec2::new(QUEUE_SPOTS[0].0, QUEUE_SPOTS[0].1)]),
+        path: VecDeque::from([Vec2::new(QUEUE_SPOTS[spot].0, QUEUE_SPOTS[spot].1)]),
         patience: 45.0,
         max_patience: 45.0,
         bubble: None,
         bubble_t: 0.0,
-        spot: 0,
+        spot,
         served: false,
         step_t: 0.0,
     };
@@ -179,7 +190,7 @@ pub fn hooligan_behavior(
             }
             continue;
         }
-        if c.state != CustState::Queued || h.going {
+        if c.state != CustState::Queued || c.spot != 0 || h.going {
             continue;
         }
         h.t += dt;
