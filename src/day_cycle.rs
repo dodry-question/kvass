@@ -447,7 +447,7 @@ pub fn day_system(
     if state.alarm_t > 0.0 {
         state.alarm_t = (state.alarm_t - dt).max(0.0);
     }
-    // Подбитый глаз: красно-мутный эффект постепенно проходит.
+    // Подбитый глаз: мутный эффект постепенно проходит.
     if state.black_eye > 0.0 {
         state.black_eye = (state.black_eye - dt).max(0.0);
     }

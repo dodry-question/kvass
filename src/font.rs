@@ -382,15 +382,6 @@ impl Font {
         }
     }
 
-    /// Отладка для ватермарки: откуда шрифт (TTF или фолбэк 5×6).
-    pub fn source_label(&self) -> &'static str {
-        if self.ttf {
-            "GOLOS-TTF"
-        } else {
-            "FALLBACK-5x6!"
-        }
-    }
-
     fn metrics_of(&self, size: usize) -> SizeMetrics {
         let s = pick_nearest(size);        *self
             .metrics

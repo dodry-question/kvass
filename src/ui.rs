@@ -750,19 +750,6 @@ fn draw_hud(
         font.draw(c, x, BAR_Y + 16, hint, SZ_S, col::TILE_D, 230);
     }
 
-    // Ватермарка билда (ТЗ): если её нет — запущен старый exe.
-    // FONT: показывает, какой шрифт реально в игре (GOLOS / FALLBACK-5x6).
-    {
-        let bid = format!(
-            "{} FONT:{} {}",
-            crate::BUILD_ID,
-            font.source_label(),
-            font.px_label
-        );
-        let x = (CV_W - font.w(&bid, SZ_S)) / 2;
-        font.draw(c, x, 6, &bid, SZ_S, col::TILE_D, 150);
-    }
-
     // --- Строка уведомления ---
     if state.msg_t > 0.0 {
         let alpha: u8 = if state.msg_t < 0.7 {
@@ -2205,19 +2192,21 @@ pub fn draw_ambush(
         c.rect(CV_W - 18, 0, 18, CV_H, [150, 0, 0], 120);
         return;
     }
-    c.dim(140);
-    let x = 140;
-    let y = 78;
-    let w = CV_W - 280;
-    let h = CV_H - 156;
+    // Нижняя диалоговая плашка: окно низкое, поэтому лицо разбойника
+    // (верхняя половина экрана) остаётся открытым при любой его позе.
+    c.dim(90);
+    let x = 0;
+    let y = 480;
+    let w = CV_W;
+    let h = CV_H - y;
     panel(c, x, y, w, h);
 
-    red_plate(c, x + 30, y + 24, 320, 64);
+    red_plate(c, x + 24, y + 14, 230, 46);
     font.draw_fit_sh(
         c,
-        x + 50,
-        y + 36,
-        280,
+        x + 40,
+        y + 22,
+        198,
         "БАНДИТ",
         SZ_L,
         col::WHITE,
@@ -2225,10 +2214,10 @@ pub fn draw_ambush(
     );
     font.draw_fit(
         c,
-        x + 370,
-        y + 38,
-        w - 400,
-        "КОРИДОР - ВОЗВРАЩЕНИЕ СО СКЛАДА",
+        x + 276,
+        y + 24,
+        430,
+        "ВОЗВРАЩЕНИЕ СО СКЛАДА",
         SZ_S,
         col::PLASTER,
         220,
@@ -2237,11 +2226,11 @@ pub fn draw_ambush(
     let phrase_y = draw_text_block(
         c,
         font,
-        x + 40,
-        y + 116,
-        w - 80,
+        x + 24,
+        y + 64,
+        w - 48,
         ambush.phrase(),
-        SZ_M,
+        SZ_S,
         col::LAMP,
     );
 
@@ -2253,51 +2242,51 @@ pub fn draw_ambush(
                 format!("2. ИСПОЛЬЗОВАТЬ: {item}"),
                 "3. СОВРАТЬ".to_string(),
             ];
-            let mut oy = phrase_y + 28;
+            let mut oy = (phrase_y + 8).max(y + 96);
             for (i, opt) in opts.iter().enumerate() {
                 let selected = ambush.choice == i;
-                c.rect(x + 42, oy, w - 84, 62, [12, 10, 8], 225);
+                c.rect(x + 24, oy, w - 48, 40, [12, 10, 8], 225);
                 c.frame(
-                    x + 42,
+                    x + 24,
                     oy,
-                    w - 84,
-                    62,
+                    w - 48,
+                    40,
                     if selected { col::LAMP } else { col::METAL_D },
                     255,
                 );
                 if selected {
-                    c.rect(x + 48, oy + 8, 5, 46, col::RED, 255);
+                    c.rect(x + 30, oy + 5, 5, 30, col::RED, 255);
                 }
                 font.draw_fit(
                     c,
-                    x + 66,
-                    oy + 16,
-                    w - 130,
+                    x + 46,
+                    oy + 7,
+                    w - 100,
                     opt,
                     SZ_M,
                     if selected { col::LAMP } else { col::WHITE },
                     255,
                 );
-                oy += 74;
+                oy += 46;
             }
             if !ambush.notice.is_empty() {
                 font.draw_fit(
                     c,
-                    x + 46,
-                    y + h - 112,
-                    w - 92,
+                    x + 24,
+                    y + h - 74,
+                    w - 48,
                     &ambush.notice,
                     SZ_S,
                     col::RED,
                     255,
                 );
             }
-            let hint = "1 / 2 / 3 ИЛИ W / S + ENTER    |    ВРЕМЯ ОСТАНОВЛЕНО";
+            let hint = "1 / 2 / 3 ИЛИ W / S + ENTER  |  ВРЕМЯ ОСТАНОВЛЕНО";
             font.draw_fit(
                 c,
-                x + 46,
-                y + h - 62,
-                w - 92,
+                x + 24,
+                y + h - 30,
+                w - 48,
                 hint,
                 SZ_S,
                 col::TILE,
@@ -2305,13 +2294,13 @@ pub fn draw_ambush(
             );
         }
         AmbushStage::Result => {
-            let mut ry = y + 220;
+            let mut ry = phrase_y + 12;
             ry = draw_text_block(
                 c,
                 font,
-                x + 46,
+                x + 24,
                 ry,
-                w - 92,
+                w - 48,
                 &ambush.result,
                 SZ_M,
                 if ambush.result_good { col::LAMP } else { col::WHITE },
@@ -2319,10 +2308,10 @@ pub fn draw_ambush(
             if ambush.black_eye_hit {
                 font.draw_fit(
                     c,
-                    x + 46,
-                    ry + 18,
-                    w - 92,
-                    "ГЛАЗ ЗАПЛЫЛ: ПОЛОВИНА ЭКРАНА КРАСНАЯ И МУТНАЯ",
+                    x + 24,
+                    ry + 12,
+                    w - 48,
+                    "ГЛАЗ ЗАПЛЫЛ: ПРАВАЯ ПОЛОВИНА ЭКРАНА МУТНАЯ И РАСПЛЫВАЕТСЯ",
                     SZ_S,
                     col::RED,
                     255,
@@ -2333,7 +2322,7 @@ pub fn draw_ambush(
             font.draw_sh(
                 c,
                 x + (w - hw) / 2,
-                y + h - 66,
+                y + h - 34,
                 hint,
                 SZ_M,
                 col::LAMP,
@@ -2429,7 +2418,7 @@ pub fn draw_debug_console(
         ix,
         iy + 122,
         iw,
-        "day 1 | day 2 | day 3     stop     play     band     unband     help",
+        "day 1 | day 2 | day 3     stop     play     band     unband     hit     help",
         SZ_S,
         col::TILE,
         235,
@@ -2446,67 +2435,86 @@ pub fn draw_debug_time_badge(c: &mut Canvas, font: &Font) {
     font.draw_fit(c, x + 12, y + 8, w - 24, text, SZ_S, col::LAMP, 255);
 }
 
-/// Красно-мутный «подбитый глаз»: левая половина экрана. Рисуется поверх
-/// HUD, но под окнами отладки/бандита.
+/// «Подбитый глаз»: правая половина экрана заплывает мягкой тёплой дымкой.
+/// Никакого насыщенного красного — только молочная пелена и расфокус.
+/// Рисуется поверх HUD, но под окнами отладки/бандита.
 pub fn draw_black_eye(c: &mut Canvas, t: f32, secs: f32) {
     let strength = (secs / 5.0).clamp(0.0, 1.0);
     if strength <= 0.0 {
         return;
     }
     let half = CV_W / 2;
-    c.rect(0, 0, half, CV_H, [150, 8, 8], (88.0 * strength) as u8);
-    // крупные «плывущие» пятна — имитация мутной пелены
-    let step = 28i32;
+    // Тёплая розовая пелена — «запотевшее стекло», а не кровь.
+    c.rect(half, 0, CV_W - half, CV_H, [222, 178, 172], (80.0 * strength) as u8);
+    // Крупные расфокусированные пятна: еле заметные переливы света.
+    let step = 30i32;
     for y in (0..CV_H).step_by(step as usize) {
-        for x in (0..half).step_by(step as usize) {
-            let n = ((x as f32 * 0.013 + y as f32 * 0.019 + t * 0.8).sin() * 0.5 + 0.5)
+        for x in (half..CV_W).step_by(step as usize) {
+            let n = ((x as f32 * 0.011 + y as f32 * 0.017 + t * 0.55).sin() * 0.5 + 0.5)
                 .clamp(0.0, 1.0);
-            if n > 0.52 {
+            if n > 0.6 {
                 c.rect(
                     x,
                     y,
                     step,
                     step,
-                    [92, 0, 0],
-                    (46.0 * strength * n) as u8,
+                    [196, 150, 146],
+                    (26.0 * strength * n) as u8,
                 );
-            } else if n < 0.18 {
+            } else if n < 0.28 {
                 c.rect(
                     x,
                     y,
                     step,
                     step,
-                    [205, 155, 145],
-                    (18.0 * strength) as u8,
+                    [250, 228, 220],
+                    (30.0 * strength * (1.0 - n)) as u8,
                 );
             }
         }
     }
-    c.rect(half - 4, 0, 4, CV_H, [70, 0, 0], (110.0 * strength) as u8);
+    // Мягкий шов: пелена наплывает постепенно, без резкой линии по центру.
+    for i in 0..5 {
+        c.rect(
+            half + i * 8,
+            0,
+            8,
+            CV_H,
+            [232, 196, 188],
+            (30.0 * strength) as u8,
+        );
+    }
 }
 
-/// Мир под «подбитым глазом»: левая половина крупнопиксельная и красная.
-/// Применяется к готовому RGBA-кадру рейкастера после `present()`.
+/// Мир под «подбитым глазом»: правая половина уходит в тёплый серо-розовый
+/// туман и крупные пиксели. Мягко, без «кровавой» заливки. Применяется к
+/// готовому RGBA-кадру рейкастера после `present()`.
 pub fn black_eye_world(rgba: &mut [u8], secs: f32) {
     let strength = (secs / 5.0).clamp(0.0, 1.0);
     if strength <= 0.0 {
         return;
     }
-    let block = 4usize;
     let half = SCREEN_W / 2;
+    let block = (7.0 + 9.0 * strength) as usize; // 7..16 px — уже не разобрать
     let mut by = 0usize;
     while by < SCREEN_H {
-        let mut bx = 0usize;
-        while bx < half {
-            let o = (by * SCREEN_W + bx) * 4;
+        // строки «расползаются» в сторону — картинка плывёт и двоится
+        let wob = ((by as f32 * 0.17).sin() * 14.0 * strength) as isize;
+        let mut bx = half;
+        while bx < SCREEN_W {
+            let sx = ((bx as isize + wob).clamp(half as isize, SCREEN_W as isize - 1)) as usize;
+            let o = (by * SCREEN_W + sx) * 4;
             let r = rgba[o] as f32;
             let g = rgba[o + 1] as f32;
             let b = rgba[o + 2] as f32;
-            let rr = (r * 0.55 + 170.0 * 0.45 * strength).min(255.0) as u8;
-            let gg = (g * 0.62).min(255.0) as u8;
-            let bb = (b * 0.62).min(255.0) as u8;
+            // Тёплый розовый туман: цвета смягчаются, но контраст остаётся —
+            // так эффект читается как расфокус, а не как серая заливка.
+            let k = 0.5 * strength;
+            let rr = (r + (225.0 - r) * k).clamp(0.0, 255.0) as u8;
+            let gg = (g + (180.0 - g) * k).clamp(0.0, 255.0) as u8;
+            let bb = (b + (176.0 - b) * k).clamp(0.0, 255.0) as u8;
             for y in by..(by + block).min(SCREEN_H) {
-                for x in bx..(bx + block).min(half) {
+                for x in bx..(bx + block).min(SCREEN_W) {
                     let i = (y * SCREEN_W + x) * 4;
                     rgba[i] = rr;
                     rgba[i + 1] = gg;

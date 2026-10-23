@@ -3,6 +3,7 @@
 //! Пока консоль открыта, весь игровой мир, музыка и звуки стоят. Команды:
 //! `day 1`, `day 2`, `day 3` — перейти на день; `stop` — остановить время;
 //! `play` — продолжить. `play` без активного `stop` ничего не делает.
+//! `hit` — включить/выключить «подбитый глаз» для проверки эффекта.
 //!
 //! Текст команд читается из `KeyboardInput::text`, поэтому в консоли можно
 //! печатать как в обычном поле ввода (латиница; команды английские).
@@ -16,7 +17,7 @@ use crate::ambush::{BanditAmbush, BanditControl};
 use crate::brewing::{Barrels, BrewQte, FirstOverbrew};
 use crate::customer::Customer;
 use crate::day_cycle::{
-    give_start_package, start_day, norm_for, Dirty, GameState, MAX_DAY, PAUSE_FROM_PLAYING,
+    give_start_package, start_day, norm_for, Dirty, GameState, Phase, MAX_DAY, PAUSE_FROM_PLAYING,
 };
 use crate::interact::{CoolQte, FillState};
 use crate::inventory::Inventory;
@@ -66,7 +67,7 @@ pub fn toggle_console(
         console.input.clear();
         if console.open {
             console.log("КОНСОЛЬ ОТЛАДКИ");
-            console.log("day 1..3 | stop | play | band | unband");
+            console.log("day 1..3 | stop | play | band | unband | hit");
         }
         keys.clear();
         return;
@@ -242,11 +243,89 @@ pub fn execute_console(
                 console.log("БАНДИТЫ ВЫКЛЮЧЕНЫ (КОМАНДА BAND ВСЁ ЕЩЁ РАБОТАЕТ)");
             }
         }
+        "hit" => {
+            // Проверка «подбитого глаза»: вкл/выкл ровно на то же время,
+            // что и удар бандита (BLACK_EYE_SECS).
+            if state.black_eye > 0.0 {
+                state.black_eye = 0.0;
+                console.log("ПОДБИТЫЙ ГЛАЗ СНЯТ");
+            } else {
+                state.black_eye = crate::ambush::BLACK_EYE_SECS;
+                console.log(format!(
+                    "ПОДБИТЫЙ ГЛАЗ: ПРАВАЯ ПОЛОВИНА МУТНАЯ ({:.0} С)",
+                    crate::ambush::BLACK_EYE_SECS
+                ));
+                if !matches!(state.phase, Phase::Playing | Phase::Tutorial) {
+                    console.log("ЭФФЕКТ ВИДЕН ТОЛЬКО В ИГРЕ (НЕ В МЕНЮ)");
+                }
+            }
+        }
         "help" => {
-            console.log("day 1..3 | stop | play | band | unband");
+            console.log("day 1..3 | stop | play | band | unband | hit");
         }
         _ => {
             console.log(format!("НЕИЗВЕСТНАЯ КОМАНДА: {cmd}"));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn app_with_command(cmd: &str) -> App {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.insert_resource(DebugConsole {
+            pending: Some(cmd.to_string()),
+            ..Default::default()
+        });
+        app.insert_resource(GameState::default());
+        app.insert_resource(Inventory::default());
+        app.insert_resource(Barrels {
+            map: HashMap::new(),
+        });
+        app.insert_resource(Dirty(0));
+        app.insert_resource(GameCam {
+            x: 0.0,
+            y: 0.0,
+            angle: 0.0,
+        });
+        app.insert_resource(Modals::default());
+        app.insert_resource(FirstOverbrew::default());
+        app.insert_resource(BrewQte::default());
+        app.insert_resource(CoolQte::default());
+        app.insert_resource(FillState::default());
+        app.insert_resource(BanditAmbush::default());
+        app.insert_resource(BanditControl::default());
+        app.add_systems(Update, execute_console);
+        app
+    }
+
+    fn run(app: &mut App, cmd: &str) {
+        app.world_mut().resource_mut::<DebugConsole>().pending = Some(cmd.to_string());
+        app.update();
+    }
+
+    #[test]
+    fn hit_toggles_black_eye_for_bandit_duration() {
+        let mut app = app_with_command("hit");
+        app.update();
+        assert_eq!(
+            app.world().resource::<GameState>().black_eye,
+            crate::ambush::BLACK_EYE_SECS
+        );
+
+        // Повторный `hit` при активном эффекте снимает его.
+        run(&mut app, "hit");
+        assert_eq!(app.world().resource::<GameState>().black_eye, 0.0);
+
+        // И снова включает на полное время, как удар бандита.
+        run(&mut app, "hit");
+        assert_eq!(
+            app.world().resource::<GameState>().black_eye,
+            crate::ambush::BLACK_EYE_SECS
+        );
     }
 }

@@ -3,7 +3,7 @@
 //!
 //! Три варианта: отдать 15 К., использовать предмет из рук/со склада,
 //! соврать. Ложь — честные 50/50: поверит и уйдёт или ударит, после чего
-//! половина экрана краснеет и мутнеет («подбитый глаз»).
+//! половина экрана мутнеет и расплывается («подбитый глаз»).
 
 use std::collections::VecDeque;
 
@@ -289,8 +289,10 @@ fn start_ambush(
 ) {
     let phrase = rng.0.random_range(0..PHRASES.len());
     let forward = Vec2::new(cam.angle.cos(), cam.angle.sin());
-    let side = Vec2::new(-forward.y, forward.x);
-    let pos = Vec2::new(cam.x, cam.y) + forward * 1.15 + side * 0.28;
+    // Ставим бандита прямо перед игроком и не даём коридору шириной в
+    // тайл задвинуть его в стену: лицо должно быть видно в диалоге.
+    let pos = Vec2::new(cam.x, cam.y) + forward * 1.15;
+    let pos = Vec2::new(pos.x, pos.y.clamp(6.15, 6.85));
     let entity = commands
         .spawn((
             Customer {
@@ -375,6 +377,7 @@ pub fn ambush_input(
                 ambush.stage = AmbushStage::Inactive;
                 ambush.bandit = None;
                 ambush.notice.clear();
+                ambush.black_eye_hit = false;
                 keys.clear();
             }
         }

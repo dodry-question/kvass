@@ -1412,6 +1412,25 @@ pub fn run() {
     snap(&canvas, Some(&world_storage), "23f_debug.bmp");
 
     // --- 23g. Бандит в коридоре: выбор ответа ---
+    // Кадр с настоящим бандитом: окно должно оставлять его лицо видимым.
+    let ambush_cam = GameCam {
+        x: 9.0,
+        y: 6.5,
+        angle: std::f32::consts::PI,
+    };
+    let bandit_pos = Vec2::new(
+        ambush_cam.x + ambush_cam.angle.cos() * 1.15,
+        (ambush_cam.y + ambush_cam.angle.sin() * 1.15).clamp(6.15, 6.85),
+    );
+    renderer.render(&map, &textures, &ambush_cam, 1.0);
+    renderer.draw_sprites(
+        &sprites,
+        &[(bandit_pos, NpcKind::Hooligan)],
+        &ambush_cam,
+        1.0,
+    );
+    renderer.present();
+    let world_ambush = renderer.rgba.clone();
     let bandit_inv = Inventory {
         hands: [Some(HandItem::Bucket), None, None, None],
         selected: 0,
@@ -1434,14 +1453,14 @@ pub fn run() {
         &no_cool,
         &no_cust,
         3.4,
-        &storage_cam,
+        &ambush_cam,
         &map,
         false,
         &no_modal,
         &no_props,
     );
     ui::draw_ambush(&mut canvas, &font, &after_intro, &bandit_inv, &bandit_choice);
-    snap(&canvas, Some(&world_storage), "23g_ambush_choice.bmp");
+    snap(&canvas, Some(&world_ambush), "23g_ambush_choice.bmp");
 
     // --- 23h. Ложь не сработала: подбитый глаз ---
     let hurt = GameState {
@@ -1474,7 +1493,7 @@ pub fn run() {
         &no_cool,
         &no_cust,
         3.4,
-        &storage_cam,
+        &ambush_cam,
         &map,
         false,
         &no_modal,
@@ -1482,7 +1501,9 @@ pub fn run() {
     );
     ui::draw_black_eye(&mut canvas, 3.4, hurt.black_eye);
     ui::draw_ambush(&mut canvas, &font, &hurt, &bandit_inv, &bandit_result);
-    snap(&canvas, Some(&world_storage), "23h_ambush_black_eye.bmp");
+    let mut world_hurt = world_ambush.clone();
+    ui::black_eye_world(&mut world_hurt, hurt.black_eye);
+    snap(&canvas, Some(&world_hurt), "23h_ambush_black_eye.bmp");
 
     // --- 24. Логика начала дня: телепорт на спавн + заставка «ДЕНЬ N» ---
     assert_eq!(crate::tutorial::TUT_STEPS.len(), 10, "в обучении 10 шагов");

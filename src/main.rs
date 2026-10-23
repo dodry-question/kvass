@@ -75,7 +75,7 @@ struct ScreenImages {
 /// (для автотестов/отладки, в т.ч. под Wine/Bottles, где borderless
 /// может не открыться). Переменные окружения на режим окна не влияют.
 fn window_setup() -> Window {
-    let title = format!("КВАСНАЯ ЛАВКА [{BUILD_ID}]");
+    let title = "КВАСНАЯ ЛАВКА".to_string();
     if std::env::args().any(|a| a == "--windowed") {
         Window {
             title,
@@ -92,8 +92,8 @@ fn window_setup() -> Window {
     }
 }
 
-/// Идентификатор сборки — выводится в HUD для проверки версии exe (ТЗ).
-pub const BUILD_ID: &str = "BUILD 4: ЭКОНОМИКА, БАНДИТЫ И ЧАС ПИК";
+/// Идентификатор сборки — только для лога самотеста (в HUD не выводится).
+pub const BUILD_ID: &str = "BUILD 5: ЗВУК, БАНДИТ И ПОДБИТЫЙ ГЛАЗ";
 
 pub fn assets_root() -> std::path::PathBuf {
     let mut bases: Vec<std::path::PathBuf> = Vec::new();
@@ -291,6 +291,9 @@ fn main() {
                     .chain()
                     .run_if(debug_closed)
                     .run_if(ambush_inactive),
+                // Сцена бандита: стинг, нагнетание и звук удара — поверх
+                // замороженного мира (поэтому без run_if(ambush_inactive)).
+                audio::ambush_sound,
                 // Музыка/SFX замирают на открытой отладке и сцене бандита.
                 audio::pause_for_overlays,
                 // модалки и доставка живут поверх замороженного мира
@@ -597,8 +600,8 @@ fn render_frame(
     // публикация кадров
     if rendered {
         world.renderer.present();
-        // Сцена бандита/«подбитый глаз»: левая половина мира становится
-        // крупнопиксельной и красной, как будто глаз заплыл.
+        // Сцена бандита/«подбитый глаз»: правая половина мира уходит в
+        // мягкую крупнопиксельную дымку, как будто глаз затек.
         if state.black_eye > 0.0 && matches!(state.phase, Phase::Playing | Phase::Tutorial) {
             ui::black_eye_world(&mut world.renderer.rgba, state.black_eye);
         }

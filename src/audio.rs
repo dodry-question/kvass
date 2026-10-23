@@ -29,8 +29,26 @@ pub const GAME_MUSIC: &[u8] = include_bytes!("../assets/music/game_theme.flac");
 pub const DAY_END_MUSIC: &[u8] = include_bytes!("../assets/music/day_end.flac");
 
 pub const SOUNDS: &[&str] = &[
-    "pour", "croutons", "water", "hiss", "ding", "hiss2", "fooff", "coin", "step1", "step2",
-    "door", "whistle", "pop", "bubble_loop", "street_loop", "alarm", "horn",
+    "pour",
+    "croutons",
+    "water",
+    "hiss",
+    "ding",
+    "hiss2",
+    "fooff",
+    "coin",
+    "step1",
+    "step2",
+    "door",
+    "whistle",
+    "pop",
+    "bubble_loop",
+    "street_loop",
+    "alarm",
+    "horn",
+    "sting",
+    "tension_loop",
+    "punch",
 ];
 
 fn write_wav(path: &PathBuf, samples: &[f32]) {
@@ -352,6 +370,87 @@ pub fn generate_files() {
         }
         write_wav(&dir.join("horn.wav"), &out);
     }
+    // «стинг» сцены бандита: резкий удар, когда он выбегает из-за угла
+    {
+        let dur = 1.5;
+        let n = (SR as f32 * dur) as usize;
+        let mut noise = Noise(41);
+        let mut lp = 0.0f32;
+        let mut p1 = 0.0f32;
+        let mut p2 = 0.0f32;
+        let mut out = Vec::with_capacity(n);
+        for i in 0..n {
+            let t = i as f32 / SR as f32;
+            let f = 120.0 + 360.0 * (-t * 7.0).exp();
+            p1 = (p1 + f / SR as f32).fract();
+            p2 = (p2 + f * 1.06 / SR as f32).fract();
+            let saw = (p1 * 2.0 - 1.0) + (p2 * 2.0 - 1.0);
+            lp = lp * 0.72 + saw * 0.5 * 0.28;
+            let e = (t / 0.004).min(1.0) * (-t * 2.2).exp();
+            let sub = (t * (52.0 - t * 6.0) * 6.28318).sin() * (-t * 2.8).exp() * 0.7;
+            let metal = (t * 1830.0 * 6.28318).sin() * (-t * 7.0).exp() * 0.16
+                + (t * 2710.0 * 6.28318).sin() * (-t * 9.0).exp() * 0.10;
+            let crack = noise.next() * (-t * 45.0).exp() * 0.45;
+            out.push(lp * e * 0.9 + sub + metal + crack);
+        }
+        write_wav(&dir.join("sting.wav"), &out);
+    }
+    // нагнетающая петля под разговор с бандитом (8 с, бесшовно)
+    {
+        use std::f32::consts::TAU;
+        let dur = 8.0;
+        let n = (SR as f32 * dur) as usize;
+        let mut noise = Noise(7);
+        let mut p55 = 0.0f32;
+        let mut p110 = 0.0f32;
+        let mut p165 = 0.0f32;
+        let mut p51 = 0.0f32;
+        let mut p440 = 0.0f32;
+        let mut p466 = 0.0f32;
+        let mut out = Vec::with_capacity(n);
+        for i in 0..n {
+            let t = i as f32 / SR as f32;
+            p55 = (p55 + 55.0 / SR as f32).fract();
+            p110 = (p110 + 110.0 / SR as f32).fract();
+            p165 = (p165 + 165.0 / SR as f32).fract();
+            p51 = (p51 + 51.0 / SR as f32).fract();
+            p440 = (p440 + 440.0 / SR as f32).fract();
+            p466 = (p466 + 466.25 / SR as f32).fract();
+            let breathe = 0.55 + 0.45 * (t * 0.25 * TAU - std::f32::consts::FRAC_PI_2).sin();
+            let drone = ((p55 * TAU).sin() * 0.55
+                + (p110 * TAU).sin() * 0.26
+                + (p165 * TAU).sin() * 0.12
+                + (p51 * TAU).sin() * 0.20)
+                * breathe;
+            let d = t % 1.0;
+            let pulse = (d * 48.0 * TAU).sin() * (-d * 9.0).exp() * 0.42;
+            let swell = 0.5 - 0.5 * (t / dur * TAU).cos();
+            let trem = 0.7 + 0.3 * (t * 4.0 * TAU).sin();
+            let strings = ((p440 * TAU).sin() + (p466 * TAU).sin()) * 0.075 * swell * trem;
+            let dt = t % 0.5;
+            let tick = noise.next() * (-dt * 55.0).exp() * 0.05;
+            out.push(drone * 0.75 + pulse + strings + tick);
+        }
+        write_wav(&dir.join("tension_loop.wav"), &out);
+    }
+    // звук удара: низкий «бум» + хруст
+    {
+        let dur = 0.5;
+        let n = (SR as f32 * dur) as usize;
+        let mut noise = Noise(99);
+        let mut ph = 0.0f32;
+        let mut out = Vec::with_capacity(n);
+        for i in 0..n {
+            let t = i as f32 / SR as f32;
+            let f = 45.0 + 120.0 * (-t * 14.0).exp();
+            ph = (ph + f / SR as f32).fract();
+            let thump = (ph * 6.28318).sin() * (-t * 7.5).exp();
+            let crack = noise.next() * (-t * 38.0).exp() * 0.55;
+            let skin = (t * 760.0 * 6.28318).sin() * (-t * 24.0).exp() * 0.18;
+            out.push(thump + crack + skin);
+        }
+        write_wav(&dir.join("punch.wav"), &out);
+    }
 }
 
 /// Банк загруженных сэмплов.
@@ -390,6 +489,9 @@ fn sfx_bytes(name: &str) -> &'static [u8] {
         "street_loop" => include_bytes!("../assets/sounds/street_loop.wav"),
         "alarm" => include_bytes!("../assets/sounds/alarm.wav"),
         "horn" => include_bytes!("../assets/sounds/horn.wav"),
+        "sting" => include_bytes!("../assets/sounds/sting.wav"),
+        "tension_loop" => include_bytes!("../assets/sounds/tension_loop.wav"),
+        "punch" => include_bytes!("../assets/sounds/punch.wav"),
         _ => &[],
     }
 }
@@ -442,6 +544,80 @@ pub fn play_sfx(commands: &mut Commands, bank: &SoundBank, name: &str, volume: f
             },
         ));
     }
+}
+
+/// Звуки сцены бандита: они звучат, даже когда мир заморожен.
+#[derive(Component)]
+pub struct AmbushSound;
+
+/// Петля нагнетания в сцене бандита.
+#[derive(Component)]
+pub struct TensionLoop;
+
+fn play_ambush_sfx(commands: &mut Commands, bank: &SoundBank, name: &str, volume: f32) {
+    if let Some(h) = bank.handles.get(name) {
+        commands.spawn((
+            AudioPlayer::new(h.clone()),
+            PlaybackSettings {
+                mode: bevy::audio::PlaybackMode::Despawn,
+                volume: bevy::audio::Volume::Linear(volume),
+                ..default()
+            },
+            AmbushSound,
+        ));
+    }
+}
+
+/// Сцена бандита: резкий стинг на выходе, нагнетающая петля под разговор
+/// и глухой удар, если он бьёт. В отличие от остального звука, эти сэмплы
+/// не замирают вместе с миром (`ambush.freeze()`).
+pub fn ambush_sound(
+    time: Res<Time>,
+    mut commands: Commands,
+    bank: Res<SoundBank>,
+    ambush: Res<crate::ambush::BanditAmbush>,
+    mut loops: Query<&mut AudioSink, With<TensionLoop>>,
+    running: Query<Entity, With<TensionLoop>>,
+    mut was_active: Local<bool>,
+    mut was_hit: Local<bool>,
+    mut fade: Local<f32>,
+) {
+    let active = ambush.freeze();
+    if active && !*was_active {
+        play_ambush_sfx(&mut commands, &bank, "sting", 0.85);
+        if let Some(h) = bank.handles.get("tension_loop") {
+            commands.spawn((
+                AudioPlayer::new(h.clone()),
+                PlaybackSettings {
+                    mode: bevy::audio::PlaybackMode::Loop,
+                    volume: bevy::audio::Volume::Linear(0.0),
+                    ..default()
+                },
+                TensionLoop,
+                AmbushSound,
+            ));
+        }
+        *fade = 0.0;
+    }
+    // Нагнетание проявляется после стинга и гаснет вместе со сценой.
+    let target = if active { 1.0 } else { 0.0 };
+    *fade += (target - *fade) * (time.delta_secs() * 1.8).min(1.0);
+    for mut sink in &mut loops {
+        sink.set_volume(bevy::audio::Volume::Linear(0.34 * *fade));
+    }
+    if !active && *was_active {
+        for e in &running {
+            commands.entity(e).despawn();
+        }
+        *fade = 0.0;
+        *was_hit = false;
+    }
+    // Удар — ровно один раз на попадание (флаг живёт и после закрытия окна).
+    if active && ambush.black_eye_hit && !*was_hit {
+        play_ambush_sfx(&mut commands, &bank, "punch", 0.95);
+    }
+    *was_hit = ambush.black_eye_hit;
+    *was_active = active;
 }
 
 /// Маркеры петель-фонов (бурление бочки).
@@ -679,10 +855,12 @@ pub fn event_sounds(
 pub fn pause_for_overlays(
     debug: Res<crate::debug::DebugConsole>,
     ambush: Res<crate::ambush::BanditAmbush>,
-    sinks: Query<&AudioSink>,
+    sinks: Query<(&AudioSink, Option<&AmbushSound>)>,
 ) {
-    let should_pause = debug.open || ambush.freeze();
-    for sink in &sinks {
+    for (sink, ambush_sound) in &sinks {
+        // Звуки сцены бандита живут вместе с замороженным миром, но
+        // отладочная консоль глушит всё, включая их.
+        let should_pause = debug.open || (ambush.freeze() && ambush_sound.is_none());
         if should_pause {
             if !sink.is_paused() {
                 sink.pause();
