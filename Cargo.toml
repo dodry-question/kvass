@@ -15,6 +15,16 @@ opt-level = 1
 [profile.dev.package."*"]
 opt-level = 3
 
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
+
+[profile.release.package."*"]
+opt-level = "z"
+
 # Иконка exe/панели задач Windows: ресурс вшивается только при сборке под Windows.
 [target.'cfg(windows)'.build-dependencies]
 winres = "0.1"
