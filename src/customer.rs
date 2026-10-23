@@ -41,6 +41,9 @@ pub struct Customer {
     pub path: VecDeque<Vec2>,
     pub patience: f32,
     pub max_patience: f32,
+    /// Терпение у прилавка: у обычных — `QUEUE_TIME`, у работяг
+    /// «Часа пик» — короче (см. `rush::WORKER_PATIENCE`).
+    pub queue_patience: f32,
     pub bubble: Option<String>,
     pub bubble_t: f32,
     pub spot: usize,
@@ -80,6 +83,7 @@ pub fn spawn_customer(
         path: path_to_spot(spot),
         patience: ENTER_TIME,
         max_patience: ENTER_TIME,
+        queue_patience: QUEUE_TIME,
         bubble: None,
         bubble_t: 0.0,
         spot,
@@ -122,8 +126,8 @@ pub fn customer_update(
                         c.path.pop_front();
                         if c.path.is_empty() {
                             c.state = CustState::Queued;
-                            c.patience = QUEUE_TIME;
-                            c.max_patience = QUEUE_TIME;
+                            c.patience = c.queue_patience;
+                            c.max_patience = c.queue_patience;
                             let line = dialogues::order_line(c.kind, c.order, &mut rng);
                             c.say(line);
                         }

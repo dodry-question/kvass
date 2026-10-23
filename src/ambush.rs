@@ -195,6 +195,7 @@ pub fn ambush_system(
     overbrew: Res<crate::brewing::FirstOverbrew>,
     debug: Res<crate::debug::DebugConsole>,
     mut control: ResMut<BanditControl>,
+    rush: Res<crate::rush::Rush>,
 ) {
     if state.phase != Phase::Playing {
         return;
@@ -217,7 +218,14 @@ pub fn ambush_system(
             ambush.prev_x = cam.x;
             return;
         }
-        if control.disabled {
+        // «Час пик»: в такой толпе бандиты не суются.
+        if rush.blocks_customers() {
+            ambush.prev_x = cam.x;
+            return;
+        }
+        // `band` обходит и выключение (`unband`), и дневной лимит.
+        let force = control.force_next;
+        if control.disabled && !force {
             ambush.prev_x = cam.x;
             return;
         }
@@ -228,7 +236,6 @@ pub fn ambush_system(
         if cam.x >= 14.0 {
             ambush.visited_warehouse = true;
         }
-        let force = control.force_next;
         if !force && !control.can_spawn(state.day) {
             ambush.prev_x = cam.x;
             return;
@@ -294,6 +301,7 @@ fn start_ambush(
                 path: VecDeque::new(),
                 patience: 9999.0,
                 max_patience: 9999.0,
+                queue_patience: 9999.0,
                 bubble: None,
                 bubble_t: 0.0,
                 spot: 0,
@@ -422,6 +430,7 @@ mod tests {
             ..Default::default()
         });
         app.insert_resource(GameRng(StdRng::seed_from_u64(7)));
+        app.insert_resource(crate::rush::Rush::default());
         app.insert_resource(crate::brewing::FirstOverbrew::default());
         app.insert_resource(crate::debug::DebugConsole::default());
         app.add_systems(Update, ambush_system);

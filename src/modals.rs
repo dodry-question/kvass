@@ -189,10 +189,12 @@ pub enum SupplyKind {
 }
 
 impl SupplyKind {
+    /// Цена за одну закупку. Партия уменьшена с 10 до 3 штук, поэтому
+    /// цена пропорциональна: было 2 К. за сухарь и 1 К. за сахар.
     pub fn price(self) -> i32 {
         match self {
-            SupplyKind::Croutons => 20,
-            SupplyKind::Sugar => 10,
+            SupplyKind::Croutons => 6,
+            SupplyKind::Sugar => 3,
         }
     }
 
@@ -203,12 +205,10 @@ impl SupplyKind {
         }
     }
 
-    /// Сколько штук приходит за одну покупку.
+    /// Сколько штук приходит за одну покупку. Маленькая партия: закупка
+    /// должна быть осмысленной, а не «на весь день вперёд».
     pub fn qty(self) -> u8 {
-        match self {
-            SupplyKind::Croutons => 10,
-            SupplyKind::Sugar => 10,
-        }
+        3
     }
 
     /// Клавиша в модалке (1..2).

@@ -30,7 +30,7 @@ pub const DAY_END_MUSIC: &[u8] = include_bytes!("../assets/music/day_end.flac");
 
 pub const SOUNDS: &[&str] = &[
     "pour", "croutons", "water", "hiss", "ding", "hiss2", "fooff", "coin", "step1", "step2",
-    "door", "whistle", "pop", "bubble_loop", "street_loop", "alarm",
+    "door", "whistle", "pop", "bubble_loop", "street_loop", "alarm", "horn",
 ];
 
 fn write_wav(path: &PathBuf, samples: &[f32]) {
@@ -329,6 +329,29 @@ pub fn generate_files() {
         }
         write_wav(&dir.join("alarm.wav"), &out);
     }
+    // «Заводской гудок» (день 3, час пик): протяжный низкий гул паровоза.
+    // Три тона с расстройкой (эффект «хорового» гудка) + паровой шум.
+    {
+        let dur = 3.6;
+        let n = (SR as f32 * dur) as usize;
+        let mut noise = Noise(31337);
+        let mut lp = 0.0f32;
+        let mut out = Vec::with_capacity(n);
+        for i in 0..n {
+            let t = i as f32 / SR as f32;
+            // лёгкая вибрация «живого» пара
+            let wob = 1.0 + (t * 4.6).sin() * 0.004;
+            let mut tone = 0.0;
+            for (f, a) in [(92.0f32, 1.0f32), (116.0, 0.7), (184.0, 0.35), (232.0, 0.2)] {
+                tone += (t * f * wob * 6.28318).sin() * a;
+            }
+            lp = lp * 0.92 + noise.next() * 0.08;
+            let steam = lp * 0.18 * (1.0 - (t / dur)).max(0.0);
+            let s = (tone * 0.30 + steam) * env(t, dur, 0.35, 1.4) * 0.9;
+            out.push(s);
+        }
+        write_wav(&dir.join("horn.wav"), &out);
+    }
 }
 
 /// Банк загруженных сэмплов.
@@ -366,6 +389,7 @@ fn sfx_bytes(name: &str) -> &'static [u8] {
         "bubble_loop" => include_bytes!("../assets/sounds/bubble_loop.wav"),
         "street_loop" => include_bytes!("../assets/sounds/street_loop.wav"),
         "alarm" => include_bytes!("../assets/sounds/alarm.wav"),
+        "horn" => include_bytes!("../assets/sounds/horn.wav"),
         _ => &[],
     }
 }

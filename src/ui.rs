@@ -609,11 +609,22 @@ fn draw_hud(
         let day = format!("ДЕНЬ {}   НОРМА {} К.", state.day, state.norm);
         font.draw(c, x + 20, y + 12, &day, SZ_S, col::WHITE, 255);
         // ход времени
-        let tp = (state.time_left / day_len(state.day)).clamp(0.0, 1.0);
+        let len = day_len(state.day).max(1.0);
+        let tp = (state.time_left / len).clamp(0.0, 1.0);
         bar(c, x + 20, y + 42, pw - 40, 12, tp, col::KVASS);
+        // Смена идёт с 10:00 до 16:00, сжатая в длину дня: середина смены —
+        // всегда 13:00 (в этот момент на 3-м дне гудит завод, см. `rush.rs`).
+        let elapsed = (len - state.time_left).clamp(0.0, len);
+        let clock = 10 * 60 + (elapsed / len * 360.0) as i32;
         let mins = (state.time_left / 60.0) as i32;
         let secs = (state.time_left as i32) % 60;
-        let to_end = format!("КОНЕЦ ДНЯ {:02}:{:02}", mins, secs);
+        let to_end = format!(
+            "{:02}:{:02} / ДО КОНЦА {:02}:{:02}",
+            clock / 60,
+            clock % 60,
+            mins,
+            secs
+        );
         font.draw(c, x + 20, y + 58, &to_end, SZ_S, col::LAMP, 255);
         // норма
         let frac = (state.day_earned as f32 / state.norm.max(1) as f32).clamp(0.0, 1.0);

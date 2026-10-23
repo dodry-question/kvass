@@ -111,7 +111,6 @@ pub fn run() {
         NpcKind::Student,
         NpcKind::Militsioner,
         NpcKind::Hooligan,
-        NpcKind::Sanepid,
     ];
     for k in &kinds {
         let (w, h, rgb) = upscale(sheet.npc_sprite(*k), 8);

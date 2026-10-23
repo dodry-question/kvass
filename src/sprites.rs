@@ -62,7 +62,6 @@ pub enum NpcKind {
     Student,
     Militsioner,
     Hooligan,
-    Sanepid,
 }
 
 impl NpcKind {
@@ -74,7 +73,6 @@ impl NpcKind {
             NpcKind::Student => "СТУДЕНТ",
             NpcKind::Militsioner => "МИЛИЦИОНЕР",
             NpcKind::Hooligan => "ХУЛИГАН",
-            NpcKind::Sanepid => "САНЭПИД",
         }
     }
 }
@@ -115,7 +113,6 @@ impl SpriteSheet {
             person(NpcKind::Student),
             person(NpcKind::Militsioner),
             person(NpcKind::Hooligan),
-            person(NpcKind::Sanepid),
         ];
         let props = vec![trash_bin()];
         Self { npc, props }
@@ -234,7 +231,6 @@ fn person(kind: NpcKind) -> Vec<u8> {
         NpcKind::Student => (idx::POLICE, idx::TILE_DARK), // куртка синяя
         NpcKind::Militsioner => (idx::POLICE, idx::POLICE),
         NpcKind::Hooligan => (idx::BLACK, idx::CEILING),   // кожанка
-        NpcKind::Sanepid => (idx::WHITE, idx::METAL_DARK), // халат
     };
 
     // ноги и ботинки
@@ -278,12 +274,6 @@ fn person(kind: NpcKind) -> Vec<u8> {
             for y in 19..38 {
                 put(&mut s, w, 16, y, idx::METAL); // молния
             }
-        }
-        NpcKind::Sanepid => {
-            for y in (20..38).step_by(4) {
-                put(&mut s, w, 16, y, idx::METAL_DARK); // пуговицы халата
-            }
-            block(&mut s, w, 10, 29, 5, 4, idx::METAL); // карман
         }
         NpcKind::Student => {
             for x in 13..19 {
@@ -411,10 +401,6 @@ fn person(kind: NpcKind) -> Vec<u8> {
                     }
                 }
             }
-        }
-        NpcKind::Sanepid => {
-            block(&mut s, w, 9, 1, 14, 4, idx::WHITE); // шапочка
-            block(&mut s, w, 8, 5, 16, 2, idx::WHITE);
         }
     }
     s

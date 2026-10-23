@@ -6,10 +6,7 @@ use crate::sprites::{NpcKind, Vessel};
 
 /// Реплика заказа — содержит «тайный заказ», который надо понять.
 pub fn order_line(kind: NpcKind, v: Vessel, rng: &mut StdRng) -> String {
-    if matches!(
-        kind,
-        NpcKind::Militsioner | NpcKind::Hooligan | NpcKind::Sanepid
-    ) {
+    if matches!(kind, NpcKind::Militsioner | NpcKind::Hooligan) {
         return official_order_line(kind, v);
     }
     let lines: &[&str] = match (kind, v) {
@@ -34,6 +31,7 @@ pub fn order_line(kind: NpcKind, v: Vessel, rng: &mut StdRng) -> String {
         ],
         (NpcKind::Worker, Vessel::Jar) => &[
             "Банку давай, на перекур хватит.",
+            "Трёхлитровую давай — бригада после смены ждёт.",
             "Мне банку. Не каприз — привычка.",
         ],
         (NpcKind::Worker, Vessel::Bottle) => &[
@@ -67,9 +65,7 @@ pub fn order_line(kind: NpcKind, v: Vessel, rng: &mut StdRng) -> String {
             "Дай бутылку, а то стипендия уже в прошлом веке.",
         ],
         // официальные персонажи обрабатываются ранним выходом выше
-        (NpcKind::Militsioner, _) | (NpcKind::Hooligan, _) | (NpcKind::Sanepid, _) => {
-            &[militsioner_line_static()]
-        }
+        (NpcKind::Militsioner, _) | (NpcKind::Hooligan, _) => &[militsioner_line_static()],
     };
     lines.choose(rng).map(|s| s.to_string()).unwrap_or_default()
 }
@@ -78,17 +74,12 @@ pub fn order_line(kind: NpcKind, v: Vessel, rng: &mut StdRng) -> String {
 fn official_order_line(kind: NpcKind, _v: Vessel) -> String {
     match kind {
         NpcKind::Militsioner => militsioner_line_static().to_string(),
-        NpcKind::Sanepid => sanepid_line_static().to_string(),
         _ => "Дай стакан, а то не выйдет дружить.".to_string(),
     }
 }
 
 fn militsioner_line_static() -> &'static str {
     "Проверка. Санитарная книжка и крышка на бочке. Баночку на проверку!"
-}
-
-fn sanepid_line_static() -> &'static str {
-    "Паспорт бочки! Брожение вне графика — нарушение! Банку на анализ."
 }
 
 /// Благодарность после оплаты.
@@ -109,6 +100,7 @@ pub fn thanks_line(kind: NpcKind, overripe: bool, rng: &mut StdRng) -> String {
         NpcKind::Worker => &[
             "Вот так бы всегда! Молодец.",
             "Э, нормальный квас! Ещё бы бутылку на дом.",
+            "Ух, после горячего цеха — самое то!",
         ],
         NpcKind::Mama => &[
             "Спасибо большое, нам пора!",
@@ -120,7 +112,6 @@ pub fn thanks_line(kind: NpcKind, overripe: bool, rng: &mut StdRng) -> String {
         ],
         NpcKind::Hooligan => &["Ну наконец-то! Цены-то космические."],
         NpcKind::Militsioner => &["Следующий раз предупрежу. А пока — спасибо."],
-        NpcKind::Sanepid => &["Паспорт бочки в порядке. На первый раз отпущу."],
     };
     lines.choose(rng).unwrap().to_string()
 }
@@ -137,19 +128,8 @@ pub fn angry_line(kind: NpcKind, rng: &mut StdRng) -> String {
         NpcKind::Student => &["Уйду в столовую. Там хоть компот есть."],
         NpcKind::Hooligan => &["Э, барин, а ну считай! Я же вижу — кваса нет."],
         NpcKind::Militsioner => &["Запишу в журнал. Поговорим в следующий раз."],
-        NpcKind::Sanepid => &["Зафиксирую нарушение в акте."],
     };
     lines.choose(rng).unwrap().to_string()
-}
-
-/// Реплика хулигана, угрожающего бочке.
-pub fn hooligan_threat(rng: &mut StdRng) -> &'static str {
-    let lines = [
-        "Э, барин, отпусти стакан, а то бочку проломаю!",
-        "Цены космические! Давай за полцены или жалобу напишу!",
-        "А ну угощай, а то стекла побью!",
-    ];
-    lines.choose(rng).unwrap()
 }
 
 /// Реплика милиционера: проверка, взятка банкой.
@@ -158,16 +138,6 @@ pub fn militsioner_line(rng: &mut StdRng) -> &'static str {
         "Проверка. Санитарная книжка и крышка на бочке.",
         "А где это бочка паспорт имеет? На проверку баночку!",
         "Не шурши — по закону спрашиваю. Баночку на пробу.",
-    ];
-    lines.choose(rng).unwrap()
-}
-
-/// Реплика санэпидемнадзора.
-pub fn sanepid_line(rng: &mut StdRng) -> &'static str {
-    let lines = [
-        "А где тут паспорт бочки? Брожение вне графика — нарушение!",
-        "Флажок срока годности висит? Нет? Это штраф.",
-        "Грязь на полу — акт. Либо банка, либо 30 копеек.",
     ];
     lines.choose(rng).unwrap()
 }

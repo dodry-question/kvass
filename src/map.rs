@@ -36,6 +36,25 @@ impl Tile {
         !matches!(self, Tile::Floor | Tile::Doorway)
     }
 
+    /// Низкая мебель/станции с непрозрачным фасадом: вокруг них действует
+    /// одна невидимая обводка (см. `player::FURNITURE_STANDOFF`).
+    ///
+    /// Мойка (`Sink`) сюда НЕ входит: она стоит вплотную к проёму коридора
+    /// на склад (тайл 8,5), и обводка перекрывала бы единственный проход.
+    /// Сквозь мойку пройти всё равно нельзя — тайл остаётся `solid()`.
+    pub fn furniture(self) -> bool {
+        matches!(
+            self,
+            Tile::Counter
+                | Tile::Barrel
+                | Tile::Shelf
+                | Tile::Croutons
+                | Tile::Sugar
+                | Tile::Supply
+                | Tile::Water
+        )
+    }
+
     /// Блокирует ли тайл луч взгляда (для рендера).
     pub fn ray_solid(self) -> bool {
         self.solid() || self == Tile::Doorway

@@ -601,7 +601,6 @@ pub fn run() {
             NpcKind::Student,
             NpcKind::Militsioner,
             NpcKind::Hooligan,
-            NpcKind::Sanepid,
         ];
         for (i, k) in kinds.iter().enumerate() {
             let spr = sprites.npc_sprite(*k);
@@ -622,7 +621,7 @@ pub fn run() {
             &mut canvas,
             60,
             400,
-            "БАБУШКА РАБОЧИЙ МАМА СТУДЕНТ МИЛИЦИОНЕР ХУЛИГАН САНЭПИД",
+            "БАБУШКА РАБОЧИЙ МАМА СТУДЕНТ МИЛИЦИОНЕР ХУЛИГАН",
             SZ_M,
             ui::col::WHITE,
             255,

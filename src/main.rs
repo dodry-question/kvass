@@ -24,6 +24,7 @@ mod modals;
 mod palette;
 mod player;
 mod raycaster;
+mod rush;
 mod dump;
 mod selftest;
 mod sprites;
@@ -92,7 +93,7 @@ fn window_setup() -> Window {
 }
 
 /// Идентификатор сборки — выводится в HUD для проверки версии exe (ТЗ).
-pub const BUILD_ID: &str = "BUILD 3: БАНДИТ, ПРЕДЫСТОРИЯ И ФИНАЛ";
+pub const BUILD_ID: &str = "BUILD 4: ЭКОНОМИКА, БАНДИТЫ И ЧАС ПИК";
 
 pub fn assets_root() -> std::path::PathBuf {
     let mut bases: Vec<std::path::PathBuf> = Vec::new();
@@ -193,6 +194,7 @@ fn main() {
         .insert_resource(ClearColor(Color::srgb(0.0, 0.0, 0.0)))
         .init_resource::<modals::Modals>()
         .init_resource::<interact::CoolQte>()
+        .init_resource::<rush::Rush>()
         .add_systems(Startup, (setup, audio::load_bank).chain())
         .add_systems(
             Update,
@@ -246,12 +248,11 @@ fn main() {
                         .run_if(in_play)
                         .run_if(no_overbrew_freeze)
                         .run_if(debug_clock_running),
-                    enemies::hooligan_spawn
-                        .run_if(in_play)
+                    // --- День 3: заводской гудок и толпа работяг ---
+                    rush::rush_start
                         .run_if(no_overbrew_freeze)
                         .run_if(debug_clock_running),
-                    enemies::hooligan_behavior
-                        .run_if(in_play)
+                    rush::rush_flow
                         .run_if(no_overbrew_freeze)
                         .run_if(debug_clock_running),
                     interact::interact

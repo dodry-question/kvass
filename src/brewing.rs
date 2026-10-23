@@ -13,12 +13,15 @@ use rand::prelude::*;
 use crate::map::Tile;
 
 /// Секунд на 0..100% в обычном (авто-)режиме.
-pub const BREW_TIME: f32 = 55.0;
+/// Ускорено в 2.5 раза (было 55 с): квас должен успевать созреть,
+/// пока покупатель стоит в очереди.
+pub const BREW_TIME: f32 = 22.0;
 /// Секунд на 100..125% при базовой скорости (окно, пока квас ещё хороший).
 pub const READY_WINDOW: f32 = 24.0;
 /// Секунд на 125..150% при базовой скорости.
 pub const OVERRIPE_TIME: f32 = 34.0;
-pub const BARREL_PORTIONS: u32 = 20;
+/// Порций кваса из одной варки (было 20 — уменьшено вдвое).
+pub const BARREL_PORTIONS: u32 = 10;
 
 /// Пороги в процентах.
 pub const PCT_READY: f32 = 100.0;
@@ -529,11 +532,10 @@ pub fn seconds_to_next(b: &Barrel) -> f32 {
     }
 }
 
-/// Время брожения конкретной бочки. Сокращено с 60–90 до 45–70: на первом
-/// дне покупатель ждёт ~78 секунд, и квас обязан успевать созреть, пока
-/// он в очереди. Разброс оставлен — две бочки бродят по-разному.
+/// Время брожения конкретной бочки: 18–28 с (было 45–70 с, ускорено
+/// в 2.5 раза). Разброс оставлен — две бочки бродят по-разному.
 pub fn random_brew_time(rng: &mut StdRng) -> f32 {
-    rng.random_range(45.0..70.0)
+    rng.random_range(18.0..28.0)
 }
 
 #[cfg(test)]
@@ -668,6 +670,7 @@ mod tests {
         });
         world.insert_resource(GameRng(StdRng::seed_from_u64(7)));
         world.insert_resource(Modals::default());
+        world.insert_resource(crate::rush::Rush::default());
         world.insert_resource(Time::<()>::default());
 
         world

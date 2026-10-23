@@ -422,6 +422,7 @@ pub fn day_system(
     mut commands: Commands,
     mut modals: ResMut<crate::modals::Modals>,
     overbrew: Res<crate::brewing::FirstOverbrew>,
+    rush: Res<crate::rush::Rush>,
 ) {
     if state.phase != Phase::Playing {
         return;
@@ -469,6 +470,11 @@ pub fn day_system(
     // спавн покупателей
     state.spawn_t -= dt;
     if state.spawn_t <= 0.0 {
+        // «Час пик» (день 3): пока толпа работяг не разошлась, обычные
+        // покупатели не заходят — очередь не разбавляется.
+        if rush.blocks_customers() {
+            return;
+        }
         let mut taken = [false; QUEUE_SPOTS.len()];
         for c in customers.iter() {
             if c.spot < taken.len() {

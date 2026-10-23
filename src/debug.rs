@@ -138,14 +138,7 @@ pub fn execute_console(
     mut fill: ResMut<FillState>,
     mut ambush: ResMut<BanditAmbush>,
     mut control: ResMut<BanditControl>,
-    customers: Query<
-        (
-            Entity,
-            Option<&crate::enemies::Hooligan>,
-            Option<&crate::ambush::AmbushBandit>,
-        ),
-        With<Customer>,
-    >,
+    customers: Query<(Entity, Option<&crate::ambush::AmbushBandit>), With<Customer>>,
     mut commands: Commands,
 ) {
     let Some(cmd) = console.pending.take() else {
@@ -167,7 +160,7 @@ pub fn execute_console(
                 console.log(format!("ДОСТУПНЫ ДНИ 1..{MAX_DAY}"));
                 return;
             }
-            for (e, _, _) in customers.iter() {
+            for (e, _) in customers.iter() {
                 commands.entity(e).despawn();
             }
             ambush.reset();
@@ -217,13 +210,17 @@ pub fn execute_console(
         }
         "band" => {
             // Следующий переход склад → касса запустит сцену гарантированно,
-            // даже если дневной лимит уже исчерпан.
-            control.disabled = false;
+            // даже если включён `unband` или исчерпан дневной лимит.
             control.force_next = true;
-            console.log("СЛЕДУЮЩИЙ ВЫХОД СО СКЛАДА: БАНДИТ ГАРАНТИРОВАН");
+            if control.disabled {
+                console.log("СЛЕДУЮЩИЙ ВЫХОД СО СКЛАДА: БАНДИТ ГАРАНТИРОВАН (UNBAND НЕ МЕШАЕТ)");
+            } else {
+                console.log("СЛЕДУЮЩИЙ ВЫХОД СО СКЛАДА: БАНДИТ ГАРАНТИРОВАН");
+            }
         }
         "unband" => {
             if control.disabled {
+                // Повторный unband — снова случайные появления из-за угла.
                 control.disabled = false;
                 control.force_next = false;
                 console.log(format!(
@@ -232,17 +229,17 @@ pub fn execute_console(
                     BanditControl::max_for_day(state.day)
                 ));
             } else {
+                // «Вовсе» — ни одного случайного бандита из-за угла,
+                // но команда `band` продолжает работать.
                 control.disabled = true;
                 control.force_next = false;
-                // «Вовсе» — убираем и уже пришедших бандитов/хулиганов,
-                // а не только прекращаем новые появления.
-                for (e, hooligan, bandit) in customers.iter() {
-                    if hooligan.is_some() || bandit.is_some() {
+                for (e, bandit) in customers.iter() {
+                    if bandit.is_some() {
                         commands.entity(e).despawn();
                     }
                 }
                 ambush.reset();
-                console.log("БАНДИТЫ ВЫКЛЮЧЕНЫ");
+                console.log("БАНДИТЫ ВЫКЛЮЧЕНЫ (КОМАНДА BAND ВСЁ ЕЩЁ РАБОТАЕТ)");
             }
         }
         "help" => {

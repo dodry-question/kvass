@@ -12,7 +12,6 @@ use crate::inventory::{HandItem, Inventory};
 use crate::map::Tile;
 use crate::modals::{Modal, Modals};
 use crate::raycaster::GameCam;
-use crate::sprites::NpcKind;
 
 /// Прогресс розлива/промывки бочки.
 #[derive(Resource, Default)]
@@ -281,19 +280,6 @@ pub fn interact(
                 return;
             };
             let Ok((_, mut c)) = customers.get_mut(entity) else { return };
-            // ТЗ №7 (бандиты): у кассы бандит требует дань — E платит 30 К.
-            if c.kind == NpcKind::Hooligan {
-                if state.money >= 30 {
-                    state.money -= 30;
-                    c.served = true;
-                    crate::audio::play_sfx(&mut commands, &bank, "coin", 0.8);
-                    state.notify("ДАНЬ ЗАПЛАЧЕНА: -30 К.".into());
-                } else {
-                    state.notify("НЕТ 30 К. НА ДАНЬ!".into());
-                    state.face_set(2, 1.0);
-                }
-                return;
-            }
             let order = c.order;
             let kind = c.kind;
             match inv.take_full(order) {

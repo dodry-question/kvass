@@ -127,6 +127,7 @@ pub fn tutorial_system(
             path: VecDeque::from([Vec2::new(QUEUE_SPOTS[0].0, QUEUE_SPOTS[0].1)]),
             patience: 9999.0,
             max_patience: 9999.0,
+            queue_patience: 9999.0,
             bubble: None,
             bubble_t: 0.0,
             spot: 0,
