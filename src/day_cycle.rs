@@ -456,6 +456,16 @@ pub fn day_system(
     if overbrew.freeze() {
         return;
     }
+    // План дня выполнен — заканчиваем смену как успех, не дожидаясь конца времени.
+    if state.money >= state.norm {
+        state.time_left = 0.0;
+        state.day_passed = true;
+        state.phase = Phase::DayEnd;
+        modals.modal = crate::modals::Modal::None;
+        modals.sponge = crate::modals::Sponge::default();
+        return;
+    }
+
     state.time_left -= dt;
     if state.time_left <= 0.0 {
         state.time_left = 0.0;
