@@ -318,3 +318,5 @@ tools/
 ## Лиценза
 
 Игра сделана для Vyatka Owls Game Jam.
+
+😜
