@@ -173,11 +173,13 @@ fn item_result(item: &HandItem) -> String {
             "ВЫ: Швырнули в бандита сахар с изюмом!\n\nБАНДИТ: Тьфу, сладко! Уйди с глаз.".into()
         }
         HandItem::Empty(v, _) => format!(
-            "ВЫ: Замахнулись пустым {}!\n\nБАНДИТ: Псих! Ладно, проходи.",
+            "ВЫ: Замахнулись пустым {}!\n\nБАНДИТ: Псих! Ладно, проходи.\n\n({} УПАЛ НА ПОЛ И СТАЛ ГРЯЗНЫМ — ПОМОЙТЕ)",
+            v.name(),
             v.name()
         ),
         HandItem::Full(v, _, _) => format!(
-            "ВЫ: Плеснули квасом из {}!\n\nБАНДИТ: Фу, липко! Отстань.",
+            "ВЫ: Плеснули квасом из {}!\n\nБАНДИТ: Фу, липко! Отстань.\n\n({} УПАЛ НА ПОЛ И СТАЛ ГРЯЗНЫМ — ПОМОЙТЕ)",
+            v.name(),
             v.name()
         ),
     }
@@ -397,6 +399,40 @@ mod tests {
     }
 
     #[test]
+    fn vessel_thrown_at_bandit_becomes_dirty_not_lost() {
+        // Единственная бутылка, брошенная в бандита, не должна пропадать
+        // из пула посуды — иначе день превращается в софтлок.
+        let mut ambush = BanditAmbush::default();
+        let mut state = GameState::default();
+        let mut rng = GameRng(StdRng::seed_from_u64(1));
+
+        let mut inv = Inventory::default();
+        inv.put(HandItem::Empty(Vessel::Bottle, 1));
+        choose(
+            1,
+            &mut ambush,
+            &mut state,
+            &mut inv,
+            &mut rng,
+        );
+        assert_eq!(ambush.stage, AmbushStage::Result);
+        assert!(inv.hands.iter().all(|h| h.is_none()));
+        assert_eq!(inv.dirty_bottles, 1, "бутылка должна уйти в грязную");
+        assert_eq!(
+            inv.dirty_bottles + inv.stock_bottle,
+            1,
+            "пул бутылок не меняется"
+        );
+
+        // Полная банка — та же история: не исчезла, а стала грязной.
+        let mut inv2 = Inventory::default();
+        inv2.put(HandItem::Full(Vessel::Jar, 1, false));
+        choose(1, &mut ambush, &mut state, &mut inv2, &mut rng);
+        assert_eq!(inv2.dirty_jars, 1);
+        assert_eq!(inv2.dirty_jars + inv2.stock_jar, 1);
+    }
+
+    #[test]
     fn unband_disables_and_day_resets_counter() {
         let mut c = BanditControl::default();
         c.reset_day(2);
@@ -476,6 +512,12 @@ fn choose(
                 ambush.notice = "В РУКАХ И НА СКЛАДЕ НЕТ ПОДХОДЯЩЕГО ПРЕДМЕТА".into();
                 return;
             };
+            // ТЗ №4: посуда многоразовая — брошенная в бандита не исчезает
+            // из пула (иначе единственная бутылка = софтлок), а уходит
+            // в грязную: мойка вернёт её на склад. Ведро и сырьё расходуются.
+            if let HandItem::Empty(v, _) | HandItem::Full(v, _, _) = &item {
+                inv.add_dirty(*v);
+            }
             ambush.result_good = true;
             ambush.result = item_result(&item);
             state.face_set(1, 2.0);
