@@ -3,18 +3,19 @@
 use bevy::prelude::*;
 use bevy::ecs::message::MessageReader;
 
-use crate::map::Map;
+use crate::map::{Map, Tile};
 use crate::raycaster::GameCam;
 
 pub const SPEED: f32 = 3.0;
 pub const TURN_SPEED: f32 = 2.5;
 pub const MOUSE_SENS: f32 = 0.0025;
 pub const RADIUS: f32 = 0.25;
-/// ТЗ №7: отступ игрока от низкой мебели — не ближе ~0.6 юнита, иначе
-/// игрок «заглядывает» в текстуру прилавка и видит сквозь неё.
-/// Обводка фиксированная и одна для ВСЕХ блоков прилавка/полок: прилавок,
-/// мойка, стеллаж посуды, бочка, сухари, сахар, вода, окно снабжения.
-pub const FURNITURE_STANDOFF: f32 = 0.6;
+/// ТЗ №7 (переработка): лёгкая обводка низкой мебели. Коробка игрока
+/// (RADIUS + FURNITURE_STANDOFF) проверяется против тайлов мебели
+/// целиком, а не четырьмя точками по осям: старая проба пропускала
+/// диагональ — в углах прилавка камера «заходила» внутрь полублока.
+/// Стенка тонкая (0.2 поверх радиуса), чтобы не перекрывать проходы.
+pub const FURNITURE_STANDOFF: f32 = 0.2;
 
 pub fn movement(
     time: Res<Time>,
@@ -62,26 +63,27 @@ pub fn movement(
     }
 }
 
-fn blocked(map: &Map, x: f32, y: f32) -> bool {
-    // ТЗ №7: не подходим ближе FURNITURE_STANDOFF к любой низкой мебели —
-    // иначе камера «заглядывает» в неё и видит сквозь фасад. Обводка одна
-    // и та же по всем четырём осям, независимо от того, что за тайлом.
-    for (px, py) in [
-        (x + FURNITURE_STANDOFF, y),
-        (x - FURNITURE_STANDOFF, y),
-        (x, y + FURNITURE_STANDOFF),
-        (x, y - FURNITURE_STANDOFF),
-    ] {
-        if map.get(px.floor() as i32, py.floor() as i32).furniture() {
-            return true;
-        }
-    }
-    for (ox, oy) in [(-RADIUS, -RADIUS), (RADIUS, -RADIUS), (-RADIUS, RADIUS), (RADIUS, RADIUS)] {
-        if map.get((x + ox).floor() as i32, (y + oy).floor() as i32).solid() {
-            return true;
+/// Пересекает ли коробка игрока [x±r, y±r] хотя бы один тайл с предикатом.
+fn box_hits(map: &Map, x: f32, y: f32, r: f32, pred: impl Fn(Tile) -> bool) -> bool {
+    let x0 = (x - r).floor() as i32;
+    let x1 = (x + r).floor() as i32;
+    let y0 = (y - r).floor() as i32;
+    let y1 = (y + r).floor() as i32;
+    for ty in y0..=y1 {
+        for tx in x0..=x1 {
+            if pred(map.get(tx, ty)) {
+                return true;
+            }
         }
     }
     false
+}
+
+fn blocked(map: &Map, x: f32, y: f32) -> bool {
+    // ТЗ №7: коробка против тайлов — фасады и УГЛЫ мебели закрыты
+    // одинаково (4-точечная проба по осям пропускала диагональ).
+    box_hits(map, x, y, RADIUS, |t| t.solid())
+        || box_hits(map, x, y, RADIUS + FURNITURE_STANDOFF, |t| t.furniture())
 }
 
 /// Поворот мышью. Захват курсора включается автоматически при входе в игру
@@ -109,6 +111,28 @@ mod tests {
     /// Точка проходима: внутри пола и не в обводке мебели.
     fn walkable(map: &Map, x: f32, y: f32) -> bool {
         !map.get(x.floor() as i32, y.floor() as i32).solid() && !blocked(map, x, y)
+    }
+
+    /// Углы прилавка закрыты так же, как фасады: по диагонали к угловому
+    /// тайлу вплотную зайти нельзя (старая 4-точечная проба это пропускала,
+    /// и камера «проваливалась» в полублок — визуальный баг у стойки).
+    #[test]
+    fn counter_corners_stay_blocked() {
+        let map = Map::shop();
+        // Углы Г-образного прилавка: внешний (4,4)-(8,4) и внутренний (4,7).
+        for (cx, cy) in [(4.0, 4.0), (8.0, 4.0), (4.0, 7.0)] {
+            // диагональный подход: центр игрока на 0.4 по диагонали от угла
+            let d = 0.4f32;
+            let dx = cx + if cx >= 8.0 { d } else { -d };
+            let dy = cy - d;
+            assert!(
+                blocked(&map, dx, dy),
+                "угол прилавка ({cx},{cy}) пропускает диагональ ({dx:.2},{dy:.2})"
+            );
+        }
+        // Но вплотную «по прямой» подход остаётся возможным с разумным зазором:
+        assert!(!blocked(&map, 6.5, 5.7), "подход к прилавку стал толще, чем нужно");
+        assert!(!blocked(&map, 15.5, 5.7), "подход к сухарям закрыт обводкой");
     }
 
     /// Обводка не должна отрезать единственный проход на склад и подходы
