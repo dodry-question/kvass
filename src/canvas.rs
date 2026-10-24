@@ -91,14 +91,18 @@ impl Canvas {
         }
     }
 
-    /// Итоговый кадр для самотеста: мир 640×400 → ×2, поверх — канвас UI.
+    /// Итоговый кадр: мир 640×400 → ×2, поверх — канвас UI.
+    /// Используется и самотестом (BMP-кадры), и живым окном (текстура
+    /// экрана) — поэтому итог обязан быть непрозрачным: альфа-байт мира
+    /// не гарантирован, а BMP альфу игнорирует.
     pub fn over_world(&self, world_rgba: &[u8]) -> Vec<u8> {
         let mut out = vec![0u8; CV_W as usize * CV_H as usize * 4];
         for y in 0..CV_H as usize {
             for x in 0..CV_W as usize {
                 let wi = ((y / 2) * 640 + (x / 2)) * 4;
                 let oi = (y * CV_W as usize + x) * 4;
-                out[oi..oi + 4].copy_from_slice(&world_rgba[wi..wi + 4]);
+                out[oi..oi + 3].copy_from_slice(&world_rgba[wi..wi + 3]);
+                out[oi + 3] = 255;
             }
         }
         // альфа-наложение канваса UI

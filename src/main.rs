@@ -61,12 +61,11 @@ struct World {
     flicker: f32,
 }
 
-/// Handles текстур экрана: мир 640×400 и UI-канвас 1280×800 (один ресурс,
-/// чтобы render_frame укладывался в лимит параметров Bevy).
+/// Handle кадра экрана 1280×800: композит «мир ×2 + UI», собранный на CPU
+/// (один ресурс, чтобы render_frame укладывался в лимит параметров Bevy).
 #[derive(Resource)]
 struct ScreenImages {
-    world: Handle<Image>,
-    ui: Handle<Image>,
+    frame: Handle<Image>,
 }
 
 /// Каталог assets: рядом с exe, в текущей папке или в исходниках (dev-сборка).
@@ -354,15 +353,19 @@ fn day_intro_done(state: Res<GameState>) -> bool {
 }
 
 fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
+    // Один кадр CV_W×CV_H: композит «мир ×2 + UI» собирается на CPU
+    // (canvas::over_world, тот же путь, что пишет кадры selftest).
+    // Текстура непрозрачная и Srgb: GPU ничего не смешивает и не
+    // перекодирует — на экран уходят ровно те sRGB-байты, что в кадрах.
     let mut image = Image::new(
         Extent3d {
-            width: SCREEN_W as u32,
-            height: SCREEN_H as u32,
+            width: CV_W as u32,
+            height: CV_H as u32,
             depth_or_array_layers: 1,
         },
         TextureDimension::D2,
-        vec![0u8; SCREEN_W * SCREEN_H * 4],
-        TextureFormat::Rgba8Unorm,
+        vec![0u8; CV_W as usize * CV_H as usize * 4],
+        TextureFormat::Rgba8UnormSrgb,
         RenderAssetUsages::all(),
     );
     // Квадрат экрана: каждая секунда подгоняется fit_screen под 4:3-сцену
@@ -386,33 +389,7 @@ fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
         pos: Vec2::new(5.5, 8.3),
     });
 
-    // Канвас UI 1280×800 (2× буфер мира) — прозрачный слой поверх мира.
-    let mut ui_image = Image::new(
-        Extent3d {
-            width: CV_W as u32,
-            height: CV_H as u32,
-            depth_or_array_layers: 1,
-        },
-        TextureDimension::D2,
-        vec![0u8; CV_W as usize * CV_H as usize * 4],
-        TextureFormat::Rgba8Unorm,
-        RenderAssetUsages::all(),
-    );
-    ui_image.sampler = ImageSampler::nearest();
-    let ui_handle = images.add(ui_image);
-    commands.insert_resource(ScreenImages {
-        world: handle,
-        ui: ui_handle.clone(),
-    });
-    commands.spawn((
-        ScreenQuad,
-        Sprite {
-            image: ui_handle,
-            custom_size: Some(Vec2::new(SCREEN_W as f32 * 3.0, SCREEN_H as f32 * 3.0)),
-            ..default()
-        },
-        Transform::from_xyz(0.0, 0.0, 1.0),
-    ));
+    commands.insert_resource(ScreenImages { frame: handle });
     commands.insert_resource(Canvas::new());
     commands.spawn(Camera2d);
 
@@ -605,12 +582,13 @@ fn render_frame(
         if state.black_eye > 0.0 && matches!(state.phase, Phase::Playing | Phase::Tutorial) {
             ui::black_eye_world(&mut world.renderer.rgba, state.black_eye);
         }
-        let rgba = world.renderer.rgba.clone();
-        if let Some(mut img) = images.get_mut(&screen.world) {
-            img.data = Some(rgba);
-        }
     }
-    if let Some(mut img) = images.get_mut(&screen.ui) {
-        img.data = Some(ui_canvas.px.clone());
+    // Композит «мир ×2 + UI» на CPU — тем же over_world, что пишет кадры
+    // selftest. Раньше слои смешивала GPU-альфа в линейном пространстве:
+    // полупрозрачные панели и затемнения UI не совпадали с кадрами selftest,
+    // а выходная гамма Bevy накладывалась на sRGB-байты второй раз.
+    let frame = ui_canvas.over_world(&world.renderer.rgba);
+    if let Some(mut img) = images.get_mut(&screen.frame) {
+        img.data = Some(frame);
     }
 }
